@@ -9,4 +9,6 @@ agent-workspace/
 runs/
 traces/
 .env
+.env.*
+!.env.example
 *.env.local
