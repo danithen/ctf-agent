@@ -1,0 +1,22 @@
+[project]
+name = "ctf-agent"
+version = "0.1.0"
+description = "Tool-using LLM agent for the NYU CTF Challenge (CYBERSEC 590)"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.optional-dependencies]
+bench = ["nyuctf"]
+
+[project.scripts]
+ctf-agent = "ctf_agent.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[build-system]
+requires = ["uv_build>=0.13.1,<0.14.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 100
