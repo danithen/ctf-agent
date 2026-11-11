@@ -551,6 +551,7 @@ def _job_payload(db: Job) -> dict[str, Any]:
                 "trial": ev.get("trial"),
                 "max_attempts": ev.get("max_attempts"),
                 "model": ev.get("model"),
+                "limits": ev.get("limits"),
             })
         elif ev.get("kind") == "done":
             out_events.append({

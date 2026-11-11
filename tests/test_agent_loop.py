@@ -281,3 +281,80 @@ def test_feedback_preamble_injected(tmp_path: Path, fake_chat):
                for m in sc.seen[-1])
     lines = [json.loads(l) for l in (tmp_path / "trace.jsonl").read_text().splitlines() if l]
     assert any(e.get("kind") == "feedback" for e in lines)
+
+
+# ---------------------------------------------------------------------------
+#  Evaluator escalations keyed to the BINDING budget dimension (steps | tokens)
+# ---------------------------------------------------------------------------
+def _scripted_tools(n: int) -> list[dict]:
+    """`n` model turns that each issue a distinct list_files call."""
+    return [{"assistant": {"role": "assistant", "content": None,
+                           "tool_calls": [tool_call(i + 1, "list_files",
+                                                    f'{{"depth": {i}}}')]}}
+            for i in range(n)]
+
+
+def _user_texts(seen: list[list[dict]], needle: str) -> int:
+    """How many times `needle` was injected (injections persist in the
+    conversation, so count them in the FINAL message list, not per call)."""
+    final = seen[-1] if seen else []
+    return sum(1 for m in final
+               if isinstance(m, dict) and m.get("role") == "user"
+               and needle in str(m.get("content")))
+
+
+def test_near_token_limit_warning_fires_on_tokens_not_steps(tmp_path: Path, fake_chat):
+    """With a tight token cap the urgent escalation must fire well BEFORE the
+    final step — the old step-keyed coaching never warned token deaths."""
+    ws = tmp_path / "ws"
+    write_description(ws)
+    # ~18%/call of the cap: 1100 after call 2 → halfway; 2200 after call 4
+    # (0.88 ≥ 0.85) → urgent; death at call 5's guard.
+    sc = fake_chat(_scripted_tools(5), in_tokens=500)
+    res = run_agent(make_target(flag="flag{never}"), ws,
+                    Limits(max_steps=100, max_seconds=120, tool_output_chars=4000,
+                           tool_timeout_s=30, max_output_tokens=1024,
+                           max_total_tokens=2500, max_submits=3),
+                    tmp_path / "trace.jsonl")
+    assert not res.verified
+    # neither the step wall (100) nor the 3-step countdown may fire first
+    assert _user_texts(sc.seen, "FINAL step") == 0
+    assert _user_texts(sc.seen, "Step ") == 0 or _user_texts(sc.seen, "steps remain") == 0
+    assert _user_texts(sc.seen, "URGENT: you are close to the hard token limit") == 1
+    assert _user_texts(sc.seen, "Evaluator checkpoint") == 1
+    lines = [json.loads(l) for l in (tmp_path / "trace.jsonl").read_text().splitlines() if l]
+    ckpts = [e["checkpoint"] for e in lines if e.get("kind") == "evaluator"]
+    assert ckpts == ["halfway", "near_token_limit"]
+
+
+def test_checkpoint_grey_zone_only_once_each(tmp_path: Path, fake_chat):
+    """Halfway and urgent fire at most once per run even as pressure grows."""
+    ws = tmp_path / "ws"
+    write_description(ws)
+    sc = fake_chat(_scripted_tools(8), in_tokens=500)
+    run_agent(make_target(flag="flag{never}"), ws,
+              Limits(max_steps=6, max_seconds=120, tool_output_chars=4000,
+                     tool_timeout_s=30, max_output_tokens=1024,
+                     max_total_tokens=3000, max_submits=3),
+              tmp_path / "trace.jsonl")
+    assert _user_texts(sc.seen, "Evaluator checkpoint") <= 1
+    assert _user_texts(sc.seen, "URGENT") <= 1
+
+
+def test_meta_event_records_limits(tmp_path: Path, fake_chat):
+    """Every trace's first line states the caps the run actually ran under."""
+    ws = tmp_path / "ws"
+    write_description(ws)
+    fake_chat([
+        {"assistant": {"role": "assistant", "content": None,
+                       "tool_calls": [tool_call(1, "submit_flag", '{"flag": "flag{abc}"}')]}},
+    ])
+    run_agent(make_target(), ws,
+              Limits(max_steps=30, max_seconds=900, tool_output_chars=4000,
+                     tool_timeout_s=60, max_output_tokens=1024,
+                     max_total_tokens=150000, max_submits=3),
+              tmp_path / "trace.jsonl")
+    meta = json.loads((tmp_path / "trace.jsonl").read_text().splitlines()[0])
+    assert meta["kind"] == "meta"
+    lim = meta["limits"]
+    assert "30 steps" in lim and "150000 tokens" in lim and "≤3 submits" in lim

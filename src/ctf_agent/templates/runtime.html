@@ -54,6 +54,7 @@
       const bits = [];
       if (ev.challenge) bits.push(`<span class="mono" style="font-weight:600;">${esc(ev.challenge)}</span>`);
       if (ev.model) bits.push(`<span class="muted">model ${esc(ev.model)}</span>`);
+      if (ev.limits) bits.push(`<span class="muted" title="caps this run is bounded by">${esc(ev.limits)}</span>`);
       if (ev.trial != null) bits.push(`<span class="muted">attempt ${ev.trial}${ev.max_attempts ? '/' + ev.max_attempts : ''}</span>`);
       return `<div class="ev" style="border-left:2px solid var(--accent); padding:6px 12px;"><div class="ev-head"><span class="ev-kind">meta</span>${bits.join('')}<span class="t">t=${ev.t}s</span></div></div>`;
     }

@@ -239,7 +239,16 @@ def run_agent(
         fh.write(json.dumps(rec, default=str) + "\n")
         fh.flush()
 
-    log("meta", **(metadata or {}))   # first line: lets any consumer identify the run
+    meta_data = dict(metadata or {})
+    # Self-identifying trace: the caps this run actually ran under, so a run
+    # card or forensics can see 30/150k vs 100/300k without reading code.
+    meta_data["limits"] = (f"{limits.max_steps} steps · "
+                           f"{limits.max_total_tokens or '∞'} tokens · "
+                           f"{limits.max_output_tokens}/call out · "
+                           f"{limits.tool_output_chars} chars/tool · "
+                           f"≤{limits.max_submits} submits · "
+                           f"{limits.max_seconds // 60} min")
+    log("meta", **meta_data)   # first line: run identity + caps
     if feedback:
         log("feedback", chars=len(feedback))   # trace shows the attempt saw a handoff
 
@@ -253,6 +262,8 @@ def run_agent(
     replay_once: set[tuple[str, ...]] = set()
     stubbed_ids: set[str] = set()
     nudges = 0
+    checkpointed = False    # halfway evaluator note fired once?
+    warned_end = False      # near-limit escalation fired once?
     try:
         for steps in range(1, limits.max_steps + 1):
             if time.monotonic() - t0 > limits.max_seconds:
@@ -263,17 +274,38 @@ def run_agent(
                     and in_tok + out_tok >= limits.max_total_tokens):
                 status = "token_budget"
                 break
-            # Budget-aware coaching right before the model call.
+            # Budget-aware coaching right before the model call. Pressure is
+            # the NEARER of the two dimensions (steps or tokens), so a run that
+            # is about to die on tokens gets the same escalations as one about
+            # to die on steps.
+            used = (in_tok or 0) + (out_tok or 0)
+            frac_tok = (used / limits.max_total_tokens
+                        if limits.max_total_tokens else 0.0)
+            pressure = max(steps / limits.max_steps, frac_tok)
             if steps == limits.max_steps:
                 messages.append({"role": "user", "content": (
                     "This is your FINAL step. Call submit_flag now with your best candidate "
                     "flag based on the evidence you have gathered.")})
-            elif steps == limits.max_steps // 2 and submits == 0:
-                # Evaluator checkpoint: halfway through the budget with nothing
-                # submitted. The dominant failure mode (step_limit/token_budget
-                # runs) spends it all exploring; steer the consolidation NOW.
+            elif frac_tok >= 0.85 and not warned_end:
+                # Near-death escalation keyed to the token budget: runs often
+                # die here long before the step wall (64 of 100 steps, say).
+                warned_end = True
+                left = limits.max_total_tokens - used
+                messages.append({"role": "user", "content": (
+                    f"URGENT: you are close to the hard token limit — ~{left} tokens of "
+                    f"{limits.max_total_tokens} remain. Submit your best candidate flag "
+                    "NOW; a rejected submission still counts as an attempt, silence "
+                    "scores nothing.")})
+                log("evaluator", checkpoint="near_token_limit", used=used)
+            elif pressure >= 0.5 and submits == 0 and not checkpointed:
+                # Evaluator checkpoint: halfway through the BINDING budget with
+                # nothing submitted. The dominant failure mode (step_limit/
+                # token_budget runs) spends it all exploring; steer NOW.
+                checkpointed = True
                 msg = (f"Evaluator checkpoint: half your budget is spent (step {steps} "
-                       f"of {limits.max_steps}) and you have not submitted a flag yet.")
+                       f"of {limits.max_steps}; ~{used} tokens"
+                       + (f" of {limits.max_total_tokens}" if limits.max_total_tokens else "")
+                       + ") and you have not submitted a flag yet.")
                 if repeat_hits:
                     msg += (f" You have re-issued earlier calls {repeat_hits} times — "
                             "those results will not change; work from them instead.")
@@ -283,7 +315,6 @@ def run_agent(
                 messages.append({"role": "user", "content": msg})
                 log("evaluator", checkpoint="halfway", repeats=repeat_hits)
             elif limits.max_steps - steps <= 3:
-                used = (in_tok or 0) + (out_tok or 0)
                 messages.append({"role": "user", "content": (
                     f"Status: step {steps}/{limits.max_steps}, ~{used} tokens used"
                     + (f" of {limits.max_total_tokens}" if limits.max_total_tokens else "")

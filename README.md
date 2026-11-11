@@ -78,9 +78,10 @@ zero tokens):
 - **In-run feedback.** A rejected flag returns `INCORRECT (k of N)` with the rejected
   candidate echoed back, so the model can correct course within the run. Submissions
   are capped (`CTF_MAX_SUBMITS`, default 3); busting the cap ends the run as `no_flag`
-  instead of letting it guess forever. A halfway checkpoint fires once at 50 % of the
-  step budget if nothing has been submitted, nudging the agent to consolidate what it
-  knows and try a flag.
+  instead of letting it guess forever. Escalations key on the **binding** budget
+  dimension — steps or tokens, whichever dies first: a halfway consolidation checkpoint
+  fires once at 50 % of that binding budget, and an urgent near-limit warning fires at
+  85 % of the token cap telling the agent to submit its best candidate now.
 - **Between-attempt handoff (GUI retry chains only).** When a retry runs after a model
   failure, a deterministic note is distilled from the failed attempt’s trace — outcome,
   step/tool mix, repeated and errored tool calls, every rejected flag (“do not
@@ -89,6 +90,10 @@ zero tokens):
   `CTF_FEEDBACK_NOTE=off`. Batch/scored runs deliberately do **not** use handoff notes:
   their retries stay clean-slate so pass@k measurements stay honest. (If you enable
   notes for scored runs, label the results as a different ablation.)
+
+Every trace's first line (`meta`) also records the exact caps the run ran under — if a
+run card shows `100 steps · 300000 tokens`, that run really did use those limits: check
+the Config tab (or `.env`, which it persists to) before comparing runs.
 
 Metrics from run artifacts:
 

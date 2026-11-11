@@ -37,9 +37,17 @@ scaffolding around it:
   dashboard); `batch.py` runs the scored set headlessly and snapshots the exact config
   (`config.json`: benchmark commit, agent commit, model, limits) next to each results set.
 
-**Fixed experimental hyperparameters** (identical across every reported attempt):
-30 steps · 15 min · 150 000 total tokens · 4 000 tool-output chars · 60 s tool timeout ·
-1 024 output tokens per call · model `gpt-5.4-mini` (Duke AI Gateway).
+**Fixed experimental hyperparameters** (identical across every reported attempt): 30 steps ·
+15 min · 150 000 total tokens · 4 000 tool-output chars · 60 s tool timeout · 1 024 output
+tokens per call · model `gpt-5.4-mini` (Duke AI Gateway).
+
+⚠ **Config drift found 2026-11-11:** the GUI Config tab persists overrides to `.env`, and
+the live session had been bumped to **100 steps · 300 000 tokens · 1 500 chars/tool**.
+Recent attempts (rev-baby-mult t3, rev-sourcery t1/t2 15:29 runs) therefore ran under
+those caps, not the fixed hyperparameters — rev-sourcery died at **301 003 of 300 000**
+tokens on step 64 of 100. Any comparison against the 30/150k rows must treat these as a
+separate (looser) configuration. The Config tab now also stamps the caps it used into
+each trace, so this cannot go unnoticed again.
 
 ## 2. Problems encountered
 
@@ -87,7 +95,8 @@ Each change was piloted on 1 trial of one challenge before being kept or rejecte
 | V5 | Context elision + one-shot replay | rev-tablez | token_budget (elision triggers late; see below) | kept |
 | V6 | Nudge-not-kill (≤2 prose replies) | rev-baby-mult | no_flag but with attempts made | kept |
 | V7 | Toolkit-facts prompt (verified sandbox semantics, notes-file habit, early submission) | — | pending pilot | — |
-| V8 | Deterministic evaluator loop: rich `INCORRECT (k/N)` rejections, submission cap (3), halfway consolidation checkpoint, and between-retry handoff notes distilled from the failed attempt's trace | rev-baby-mult (handoff previewed on real failed traces) | covered by scripted-fake tests; live ablation pending | kept (defaults on; scored runs stay clean-slate) |
+| V8 | Deterministic evaluator loop: rich `INCORRECT (k/N)` rejections, submission cap (3), halfway consolidation checkpoint, and between-retry handoff notes distilled from the failed attempt's trace | rev-sourcery ×2 (live) | wiring verified in traces (note delivered, checkpoint fired, elision active) but both attempts still died at token budget with 0 submissions; **coaching was step-keyed while the binding constraint was tokens** | kept; coaching re-keyed in V9 |
+| V9 | Escalations keyed to the binding budget dimension: halfway checkpoint at 50 % of steps *or* tokens (whichever is nearer death), urgent submit-now warning at 85 % of the token cap, and per-run limits stamped into every trace's `meta` line | — | pending pilot | — |
 
 Key insight from V1–V4: prompt changes *shift behavior* (objdump usage went from ~0 to
 7/11 scripts) but do not by themselves recover flags; the binding constraint for
