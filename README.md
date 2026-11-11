@@ -32,6 +32,7 @@ provides a web UI (challenge selection / live runtime feed / report) and
 ```bash
 uv sync --all-groups          # core + dev deps; add --extra bench for nyuctf
 cp .env.example .env          # then fill in tokens (never committed)
+sudo apt install bubblewrap   # required: the agent sandbox (Linux/WSL2)
 ```
 
 Required in `.env`: `LITELLM_BASE_URL`, `LITELLM_TOKEN` (any OpenAI-compatible

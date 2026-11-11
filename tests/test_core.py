@@ -107,3 +107,63 @@ def test_summarize_unavailable_tokens_stay_none(tmp_path: Path) -> None:
     p.write_text(json.dumps(rows[0]))
     s = summarize(p)["challenges"]["a"]
     assert s["mean_total_tokens"] is None
+
+
+# ---------------------------------------------------------------------------
+#  Verification integrity: outside-the-workspace secrets must be invisible,
+#  and only the official benchmark flag can make a run count as solved
+# ---------------------------------------------------------------------------
+def test_sandbox_cannot_read_outside_workspace(tmp_path: Path) -> None:
+    secret = tmp_path / "secret-flag.txt"
+    secret.write_text("flag{the-answer-key}")
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    r = run_sandboxed(["cat", str(secret)], ws,
+                      timeout_s=10, output_chars=4000)
+    assert r.exit_code != 0 and "the-answer-key" not in r.stdout
+    # and directory traversal reveals nothing outside the workspace either
+    up = run_sandboxed(["ls", ".."], ws, timeout_s=10, output_chars=4000)
+    assert up.exit_code == 0 and "secret-flag.txt" not in up.stdout
+    # ...while plain in-workspace execution still works
+    ok = run_sandboxed(["python3", "-c", "print('inside-ok')"], ws,
+                       timeout_s=10, output_chars=4000)
+    assert ok.exit_code == 0 and "inside-ok" in ok.stdout
+
+
+def test_sandbox_requires_bwrap(tmp_path: Path, monkeypatch) -> None:
+    from ctf_agent.tools import sandbox
+    monkeypatch.setattr(sandbox.shutil, "which", lambda _: None)
+    with pytest.raises(RuntimeError, match="bubblewrap"):
+        run_sandboxed(["true"], tmp_path, timeout_s=5, output_chars=100)
+
+
+BENCHMARK_JSON = Path("benchmark/ctftiny.json")
+
+
+@pytest.mark.skipif(not BENCHMARK_JSON.exists(),
+                    reason="benchmark dataset (git-ignored) not present locally")
+def test_stage_workspace_never_exposes_flag_or_metadata(tmp_path: Path) -> None:
+    from ctf_agent.runner import load_target, stage_workspace
+    target = load_target(BENCHMARK_JSON, "rev-checker")
+    ws = stage_workspace(target, tmp_path / "ws")
+    files = sorted(p.name for p in ws.rglob("*") if p.is_file())
+    assert "challenge.json" not in files
+    # the official flag must not be recoverable from any staged content
+    for p in ws.rglob("*"):
+        if p.is_file():
+            assert target.expected_flag not in p.read_text(errors="replace")
+    # ...and the sandbox hides the real benchmark directory from the workspace
+    probe = run_sandboxed(["cat", str(target.challenge.challenge_dir / "challenge.json")],
+                          ws, timeout_s=10, output_chars=4000)
+    assert "flag" not in probe.stdout.lower()
+
+
+@pytest.mark.skipif(not BENCHMARK_JSON.exists(),
+                    reason="benchmark dataset (git-ignored) not present locally")
+def test_expected_flag_comes_from_official_package(tmp_path: Path) -> None:
+    from ctf_agent.runner import load_target
+    target = load_target(BENCHMARK_JSON, "rev-checker")
+    # single source of truth: the official nyuctf CTFChallenge object itself
+    assert target.expected_flag == target.challenge.flag
+    assert target.check(target.challenge.flag)
+    assert not target.check(f"  {target.challenge.flag.upper()}  ")

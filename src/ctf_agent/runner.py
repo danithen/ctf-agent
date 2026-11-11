@@ -1,13 +1,16 @@
 """Runner: owns the benchmark answer, stages contestant files, verifies flags.
 
-The answer and challenge metadata never leave this module. The agent only ever
-sees the staged workspace, the description, and the verified/not-verified result.
+The expected flag comes from exactly one place: the official ``nyuctf``
+package's ``CTFChallenge.flag``. Nothing else in this codebase reads the
+challenge flag, and nothing in the agent's view can reach the benchmark data
+(the sandbox cannot see outside the staged workspace). Verification is
+reachable only through the agent's ``submit_flag`` tool, so a run can pass
+only by submitting the key for the benchmark itself to check.
 """
 
 from __future__ import annotations
 
 import hmac
-import json
 import shutil
 import time
 from dataclasses import dataclass
@@ -20,28 +23,32 @@ from nyuctf.dataset import CTFDataset
 @dataclass
 class Target:
     challenge: CTFChallenge
-    expected_flag: str
+    expected_flag: str     # official benchmark flag (CTFChallenge.flag)
 
     @property
     def challenge_id(self) -> str:
         return self.challenge.name
 
     def check(self, candidate: str) -> bool:
+        """The verification gate: constant-time compare with the official flag."""
         return hmac.compare_digest(candidate.strip().encode(), self.expected_flag.encode())
 
 
 def load_target(dataset_json: str | Path, challenge_id: str) -> Target:
     ds = CTFDataset(dataset_json=str(dataset_json))
     chal = CTFChallenge(ds.get(challenge_id), ds.basedir)
-    meta = json.loads((chal.challenge_dir / "challenge.json").read_text())
-    expected = meta.get("flag")
+    expected = chal.flag      # official package's flag — the only flag source
     if not isinstance(expected, str):
         raise TypeError("Non-string flag format needs the benchmark's own checker")
     return Target(chal, expected)
 
 
 def stage_workspace(target: Target, workspace: Path) -> Path:
-    """Fresh workspace with only the contestant files and description."""
+    """Fresh workspace with only the contestant files and description.
+
+    Deliberately excludes challenge.json and every other metadata file — the
+    flag must not be observable from the workspace, not even by path.
+    """
     if workspace.exists():
         shutil.rmtree(workspace)
     workspace.mkdir(parents=True)
