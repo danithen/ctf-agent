@@ -15,6 +15,7 @@ from langsmith import traceable
 from ctf_agent.llm import chat_langchain as chat
 from ctf_agent.runner import Target
 from ctf_agent.tools.provision import preflight
+from ctf_agent.tools.triage import triage_brief
 from ctf_agent.tools.workspace import ToolError, Workspace
 
 TOOLS: list[dict[str, Any]] = [
@@ -73,13 +74,23 @@ SYSTEM = (
     "1. Triage: list files, inspect the few most relevant ones. For binaries start with "
     "'strings | grep -iE flag|key|secret' and 'objdump -d --no-show-raw-insn <file> | head -c 3000' "
     "targeting main/validating logic.\n"
-    "2. Keep a running notes file (write_file notes.md) with findings, transformations, and "
+    "2. Persist artifacts once: write large outputs to disk (e.g. 'objdump -d <file> | tee disasm.txt') "
+    "then grep/read_file them — never re-run overlapping slices. When parsing binary data, print its "
+    "size and first entries before building on it; build solvers only on verified parses.\n"
+    "3. If a runnable executable ships with the challenge, it is an ORACLE: "
+    "'printf \"candidate\\n\" | ./prog' answers a yes/no probe (unlimited retries). Derive candidates "
+    "from a hypothesis and test them with the oracle instead of long static derivations; a submit_flag "
+    "budget is tiny, oracle probes are not.\n"
+    "4. Prefer direct observation over reconstruction: gdb -batch can print tables/keys straight from "
+    "memory, e.g. gdb -batch -ex 'b *0x84a' -ex run -ex 'x/510bx 0xADDR' ./prog — avoid manual "
+    "virtual-address→file-offset arithmetic when a live process can print the bytes.\n"
+    "5. Keep a running notes file (write_file notes.md) with findings, transformations, and "
     "candidate flags — it survives when older tool outputs get elided from context.\n"
-    "3. Solve with targeted scripts: decode, transform, or brute-force small search spaces; re-verify "
+    "6. Solve with targeted scripts: decode, transform, or brute-force small search spaces; re-verify "
     "your derivation before submitting.\n"
-    "4. Use the flag format from the description. Submit plausible candidates as soon as they form — "
+    "7. Use the flag format from the description. Submit plausible candidates as soon as they form — "
     "a wrong guess costs one step, not the run.\n"
-    "5. Repeating an identical call is rejected (except when the output was elided — one exact repeat "
+    "8. Repeating an identical call is rejected (except when the output was elided — one exact repeat "
     "is allowed to re-view it). If a method stalls, switch approach immediately.\n"
     "\n"
     "Respond with at least one tool call each turn (concise analysis prose is welcome), or "
@@ -238,9 +249,17 @@ def run_agent(
     _ls_attach(metadata)
     ws = Workspace(workspace, timeout_s=limits.tool_timeout_s, output_chars=limits.tool_output_chars)
     description = (workspace / "description.txt").read_text()
+    # Deterministic triage brief: the static facts every attempt re-derives in
+    # its first 5-8 steps (inventory/type/arch/needle strings), pre-computed.
+    # Gated by CTF_TRIAGE so ablations can run without it.
+    triage_on = os.environ.get("CTF_TRIAGE", "on").strip().lower() != "off"
+    brief = triage_brief(workspace) if triage_on else ""
+    seed = f"Challenge: {target.challenge_id}\n\n{description}"
+    if brief:
+        seed += "\n" + brief
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": SYSTEM},
-        {"role": "user", "content": f"Challenge: {target.challenge_id}\n\n{description}"},
+        {"role": "user", "content": seed},
     ]
     if feedback:
         messages.append({"role": "user", "content":
@@ -266,13 +285,15 @@ def run_agent(
 
     meta_data = dict(metadata or {})
     # Self-identifying trace: the caps this run actually ran under, so a run
-    # card or forensics can see 30/150k vs 100/300k without reading code.
+    # card or forensics can see 30/150k vs 100/300k without reading code. Also
+    # whether the deterministic triage brief was appended (comparability).
     meta_data["limits"] = (f"{limits.max_steps} steps · "
                            f"{limits.max_total_tokens or '∞'} tokens · "
                            f"{limits.max_output_tokens}/call out · "
                            f"{limits.tool_output_chars} chars/tool · "
                            f"≤{limits.max_submits} submits · "
                            f"{limits.max_seconds // 60} min")
+    meta_data["triage"] = triage_on
     log("meta", **meta_data)   # first line: run identity + caps
     if os.environ.get("CTF_PROVISION", "on").strip().lower() != "off":
         pf = preflight(workspace)   # handout-derived package needs (idempotent)

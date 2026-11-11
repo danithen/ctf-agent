@@ -447,3 +447,53 @@ def test_prompt_does_not_claim_uninstalled_tools():
     the live trace then burned a turn on 'radare2: not found'. The prompt must
     only name binaries that are actually in the image."""
     assert "radare2" not in agent_mod.SYSTEM
+
+
+def test_seed_message_carries_triage_brief(tmp_path: Path, fake_chat):
+    """Trace evidence: every attempt spent 5-8 steps on identical triage (list/
+    file/strings/arch). The brief pre-computes those facts deterministically."""
+    ws = tmp_path / "ws"
+    write_description(ws)
+    (ws / "prog.bin").write_bytes(
+        b"\x7fELF" + bytes([2, 1]) + b"\x00" * 12 + (0x3E).to_bytes(2, "little")
+        + b"\x00" * 4 + (0x1050).to_bytes(8, "little")
+        + b"\x00" * 64 + b"type the flag:")
+    sc = fake_chat([
+        {"assistant": {"role": "assistant", "content": None,
+                       "tool_calls": [tool_call(1, "submit_flag", '{"flag": "flag{abc}"}')]}},
+    ])
+    run_agent(make_target(), ws, basic_limits(30), tmp_path / "trace.jsonl")
+    seed = sc.seen[0][1]["content"]
+    assert "TRIAGE (deterministic" in seed
+    assert "prog.bin" in seed and "x86-64, entry 0x1050" in seed
+    assert 'type the flag:' in seed                      # needle hit with offset
+    meta = json.loads((tmp_path / "trace.jsonl").read_text().splitlines()[0])
+    assert meta["triage"] is True
+
+
+def test_triage_brief_can_be_disabled(tmp_path: Path, fake_chat, monkeypatch):
+    """CTF_TRIAGE=off gives matched-cap ablations a run without the brief."""
+    ws = tmp_path / "ws"
+    write_description(ws)
+    (ws / "prog.bin").write_bytes(b"\x7fELF" + bytes([2, 1]) + b"\x00" * 30)
+    monkeypatch.setenv("CTF_TRIAGE", "off")
+    sc = fake_chat([
+        {"assistant": {"role": "assistant", "content": None,
+                       "tool_calls": [tool_call(1, "submit_flag", '{"flag": "flag{abc}"}')]}},
+    ])
+    run_agent(make_target(), ws, basic_limits(30), tmp_path / "trace.jsonl")
+    assert "TRIAGE" not in sc.seen[0][1]["content"]
+    meta = json.loads((tmp_path / "trace.jsonl").read_text().splitlines()[0])
+    assert meta["triage"] is False
+
+
+def test_prompt_documents_rev_method_facts():
+    """V16 doctrine from config-D trace mining: oracle probing (tablez never
+    probed), gdb direct memory reads (tablez died on offset arithmetic),
+    persist-once pagination + verify-before-build (tablez built 5 solvers on an
+    empty parse)."""
+    s = agent_mod.SYSTEM
+    assert "ORACLE" in s and "printf" in s
+    assert "gdb -batch" in s
+    assert "tee disasm.txt" in s
+    assert "first entries" in s
