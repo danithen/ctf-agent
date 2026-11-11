@@ -227,5 +227,11 @@ def test_preflight_statuses_are_honest(tmp_path: Path, monkeypatch) -> None:
     st = prov._ensure_installed("torch", "torch", tmp_path, "/usr/bin/python3")
     assert st == "unavailable (ERROR: b0rked wheel)"
 
+    monkeypatch.setattr(prov.subprocess, "run",
+                        lambda cmd, **kw: subprocess.CompletedProcess(
+                            cmd, 1, "", f"{cmd[0]}: No module named pip"))
+    st = prov._ensure_installed("torch", "torch", tmp_path, "/usr/bin/python3")
+    assert "python3-pip" in st and st.startswith("unavailable (no pip for")
+
     st = prov._ensure_installed("torch", "torch", tmp_path, None)
     assert st == "unavailable (no python3 on the jail PATH)"

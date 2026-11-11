@@ -42,7 +42,10 @@ as cwd, so handout sibling modules import — several CTFTiny handouts ship impo
 `.py` files). The environment is curated for the binary-analysis staples the traces
 proved the agent reaches for (objdump, strings, nm, hexdump/xxd, file, unzip and the
 compression tools) — these are installed by the Dockerfile; install the same list on
-the host so host and container behave identically.
+the host so host and container behave identically. Pre-flight provisioning also
+needs an installer for the sandbox interpreter: `sudo apt install python3-pip`
+on a host (the container image ships pip); big wheels like torch may need a
+higher `CTF_PROVISION_TIMEOUT` on slow links.
 
 Deliberately **not** provided: no network for the agent (so no `pip` at run time),
 no default ML packages (`torch` etc. — too heavy to blanket-install), and no extra

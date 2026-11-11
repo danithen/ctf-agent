@@ -23,12 +23,19 @@ records `provisioning: unavailable` so the report stays honest.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from ctf_agent.tools.sandbox import run_sandboxed
+
+# The jail fixes PATH (see sandbox.py); resolve python3 exactly like it does.
+_JAIL_PATH = "/usr/local/bin:/usr/bin:/bin"
+# Torch-class wheels are big; the pip timeout is env-tunable for slow links.
+_INSTALL_TIMEOUT_S = int(os.environ.get("CTF_PROVISION_TIMEOUT", "900"))
+_PROBE_TIMEOUT_S = 20
 
 # agent-visible signature -> (pip package, module the probe imports)
 _PT_PACKAGES: dict[str, tuple[str, str]] = {
@@ -49,12 +56,6 @@ _TEXT_PACKAGES: tuple[tuple[str, str, str], ...] = (
 )
 _TEXT_SUFFIXES = {".py", ".txt", ".md"}
 _MAX_TEXT_CHARS = 100_000
-
-_INSTALL_TIMEOUT_S = 600
-_PROBE_TIMEOUT_S = 20
-
-# The jail fixes PATH (see sandbox.py); resolve python3 exactly like it does.
-_JAIL_PATH = "/usr/local/bin:/usr/bin:/bin"
 
 
 @dataclass
@@ -145,11 +146,20 @@ def _ensure_installed(pip_pkg: str, mod: str, workspace: Path, py: str) -> str:
             check=False,
         )
     except FileNotFoundError:
-        return "unavailable (pip not present for the sandbox python)"
+        return _no_pip(py)
     except subprocess.TimeoutExpired:
-        return f"unavailable (pip install exceeded {_INSTALL_TIMEOUT_S}s)"
+        return f"unavailable (pip install exceeded {_INSTALL_TIMEOUT_S}s — " \
+               "raise CTF_PROVISION_TIMEOUT for big wheels)"
     if _probe_import(mod, workspace):
         return "installed"
+    if "No module named pip" in (r.stderr or ""):
+        return _no_pip(py)
     tail = (r.stderr or "").strip().splitlines()
     reason = tail[-1][:200] if tail else "probe still failing after install"
     return f"unavailable ({reason})"
+
+
+def _no_pip(py: str) -> str:
+    """Actionable message: pip is the one prerequisite provisioning needs."""
+    return (f"unavailable (no pip for {py} — 'sudo apt install python3-pip' "
+            "on a host; the container image ships pip)")
