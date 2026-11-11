@@ -172,6 +172,7 @@ src/ctf_agent/       runner, agent loop, llm gateway client, batch, metrics,
                      aggregate, cli, flask GUI + templates, legacy TUI
 src/ctf_agent/tools/ workspace (confined file ops) and sandbox (subprocess jail)
 configs/             scored_set.json (challenges x trials + limits)
+docs/                architecture diagrams mapped to Anthropic's agent guidance
 tests/               pytest suites (sandbox, loop, GUI; fakes, no live calls)
 results/             attempts.jsonl per experiment set + notes (artifacts local)
 runs/                per-run artifacts (git-ignored)

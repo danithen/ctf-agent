@@ -10,7 +10,59 @@
 
 We built an agent harness that solves capture-the-flag challenges from the CTFTiny
 benchmark (NYU-LLM-CTF, AAAI'26). The LLM is the reasoning core; our contribution is the
-scaffolding around it:
+scaffolding around it. Full component/sequence diagrams and a
+recommendation-by-recommendation mapping to Anthropic's *Building Effective Agents*
+essay live in [`docs/architecture.md`](docs/architecture.md); the system-level diagram:
+
+```mermaid
+flowchart TB
+    classDef model fill:#e7f1ff,stroke:#3b6ea5,color:#000
+    classDef guard fill:#fff8e1,stroke:#b8860b,color:#000
+    classDef store fill:#eef7ee,stroke:#3b7a3b,color:#000
+    classDef boundary fill:#fdecea,stroke:#b03a2e,color:#000
+
+    OPS["Operator<br>Flask GUI · CLI · headless batch"]:::model
+
+    subgraph ORCH["Orchestration — retry chain (deterministic, no model calls)"]
+        GATE{"verdict gate<br>model failure?"}:::guard
+        NOTE["handoff-note builder<br>outcome · tool mix · rejected flags<br>zero tokens · never the real flag"]:::guard
+    end
+
+    subgraph LOOP["One attempt — the model drives the loop"]
+        MSG["message assembly<br>SYSTEM prompt · challenge description<br>± evaluator handoff note"]:::model
+        MODEL["LLM tool-calling turn<br>via LiteLLM gateway"]:::model
+        EXEC["tool executor<br>7 sandboxed tools incl. submit_flag"]:::model
+        CTX["context manager<br>repeat-call guard · elision<br>into one-shot replayable stubs"]:::guard
+        EV["deterministic evaluator<br>halfway checkpoint — 50 pct of the binding budget<br>urgent warning — 85 pct of the token cap<br>INCORRECT (k of N) feedback · submission cap 3<br>nudge-not-kill — max 2 prose turns"]:::guard
+    end
+
+    SBX[["bubblewrap jail<br>no network · workspace-only filesystem<br>throwaway HOME · fixed PATH"]]:::boundary
+    VER{{"official verifier<br>CTFChallenge.flag — only path to verified = true"}}:::boundary
+    DONE["✓ solved"]:::store
+    RES[("results: attempts.jsonl<br>summary.json · config snapshot")]:::store
+    TRC[("observability: trace.jsonl<br>→ LangSmith")]:::store
+
+    OPS -->|"queue attempts (worker queue — sequential for fair limits)"| GATE
+    GATE -->|"attempt 1: clean slate"| MSG
+    GATE -->|"solved → skip remaining<br>infra error → stop the chain<br>model failure → clean-slate retry"| NOTE
+    NOTE -.->|"inject into next attempt of the family"| MSG
+    MSG -->|"prompt"| MODEL
+    MODEL -->|"tool_calls"| EXEC
+    EXEC -->|"clipped result"| CTX
+    CTX -->|"trimmed history"| MODEL
+    CTX -.->|"budget state"| EV
+    EV -.->|"coaching · rejection feedback"| MSG
+    EXEC -->|"submit_flag(candidate)"| VER
+    VER -->|"CORRECT"| DONE
+    VER -->|"INCORRECT (k of N)"| EV
+    EXEC --- SBX
+    LOOP -.->|"every model, tool, submission,<br>evaluator and elision event"| TRC
+    ORCH -->|"one row per attempt"| RES
+```
+
+The yellow nodes are deterministic guardrails (they never call the LLM); the red
+boundary is security + verification integrity: the agent can reach `verified = true`
+exclusively by submitting a candidate through the official flag check.
 
 - **Runner** (`runner.py`) — owns the benchmark answers. The agent only ever sees the
   staged workspace files and the challenge description; flag verification is a
