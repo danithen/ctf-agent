@@ -56,9 +56,11 @@ SYSTEM = (
     "strings, objdump -d, hexdump, python3 -c). Output is TRUNCATED AT THE TAIL when long — pipe "
     "through 'head -c 3000' or grep to keep the useful part. Redirects (>, >>) and chaining "
     "(; && ||) are blocked — pipe, or write a file instead.\n"
-    "- run_python: executes a .py file you must write_file into the workspace first (2 steps); "
-    "python3 is isolated; optional stdin. Print only the lines you need.\n"
-    "- Toolkit installed: objdump, strings, nm, readelf, xxd, hexdump, file, unzip, gdb, radare2, "
+    "- run_python: executes a .py FILE in the workspace — write_file it first (2 steps); "
+    "stdin is the program's input, not code. Quick no-file snippets: shell heredoc via "
+    "run_command, e.g. python3 - <<'PY' … PY. "
+    "python3 is isolated; print only the lines you need.\n"
+    "- Toolkit installed: objdump, strings, nm, readelf, xxd, hexdump, file, unzip, gdb, "
     "binwalk, exiftool, steghide, outguess, john, openssl, socat/nc, pdftotext. python3 has "
     "numpy, torch (CPU), pycryptodome, sympy, z3, gmpy2, pwntools — reach for these before "
     "reimplementing anything by hand.\n"
@@ -158,20 +160,35 @@ def _sum(a: int | None, b: int | None) -> int | None:
     return None if a is None or b is None else a + b
 
 
+TOOL_NAMES = "list_files, read_file, write_file, run_python, run_command"  # + submit_flag
+
+
+def _req(name: str, args: dict[str, Any], key: str) -> Any:
+    """Fetch a required tool argument, with an error that names the fix."""
+    if key not in args:
+        raise ToolError(
+            f"{name} is missing its required '{key}' argument — resend the call with '{key}' set."
+        )
+    return args[key]
+
+
 @traceable(name="tool", run_type="tool")
 def _run_tool(ws: Workspace, name: str, args: dict[str, Any], max_chars: int) -> str:
     """Dispatch one workspace tool. Traced so each call appears in LangSmith."""
     if name == "list_files":
         return ws.list_files()
     if name == "read_file":
-        return ws.read_file(args["path"], max_chars, args.get("offset", 0))
+        return ws.read_file(_req(name, args, "path"), max_chars, args.get("offset", 0))
     if name == "run_python":
-        return ws.run_python(args["path"], args.get("stdin"))
+        return ws.run_python(_req(name, args, "path"), args.get("stdin"))
     if name == "run_command":
-        return ws.run_command(args["cmd"])
+        return ws.run_command(_req(name, args, "cmd"))
     if name == "write_file":
-        return ws.write_file(args["path"], args["content"])
-    raise ToolError(f"unknown tool {name}")
+        return ws.write_file(_req(name, args, "path"), _req(name, args, "content"))
+    raise ToolError(
+        f"unknown tool {name}. Tools are: {TOOL_NAMES} — there are no 'strings'/'objdump'/" 
+        "'hexdump'/etc. TOOLS; those are shell binaries: call run_command instead."
+    )
 
 
 def _ls_attach(metadata: dict[str, Any] | None) -> None:

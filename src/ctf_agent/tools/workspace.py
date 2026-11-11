@@ -59,7 +59,12 @@ class Workspace:
     def run_python(self, path: str, stdin: str | None = None) -> str:
         p = self._resolve(path)
         if not p.is_file() or p.suffix != ".py":
-            raise ToolError("run_python needs a .py file in the workspace")
+            raise ToolError(
+                f"no file '{path}' in the workspace: run_python executes an existing "
+                ".py file (stdin is the program's INPUT, not the code). Create it with "
+                "write_file first, or run a snippet inline via run_command: "
+                "python3 - <<'PY' ... PY"
+            )
         r = run_sandboxed(
             # -E -s (not -I): the env is already curated by the jail (no
             # PYTHON* vars set), but -I implies -P, which drops the script's
@@ -80,7 +85,11 @@ class Workspace:
         forbidden = [";", "&&", "||", ">", ">>", "2>", "pip", "apt", "rm -rf", "chmod"]
         # We allow pipes because they are essential for analysis
         if any(f in cmd for f in forbidden if f != "|"):
-            raise ToolError(f"Command contains forbidden characters or tools: {forbidden}")
+            raise ToolError(
+                f"Command contains forbidden characters or tools: {forbidden}. "
+                "Pipes are fine — filter inside the pipe (e.g. 'objdump ... | head -c 3000') "
+                "and drop redirects like 2>/dev/null."
+            )
 
         r = run_sandboxed(
             ["/bin/sh", "-c", cmd],

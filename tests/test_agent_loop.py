@@ -12,6 +12,7 @@ from ctf_agent import agent as agent_mod
 from ctf_agent.agent import Limits, run_agent
 from ctf_agent.llm import ChatResult
 from ctf_agent.runner import Target
+from ctf_agent.tools import workspace as tools
 
 
 def make_target(flag: str = "flag{abc}") -> Target:
@@ -415,3 +416,34 @@ def test_provision_disabled_by_default_no_probe(tmp_path: Path, fake_chat,
                        "tool_calls": [tool_call(1, "submit_flag", '{"flag": "flag{abc}"}')]}},
     ])
     run_agent(make_target(), ws, basic_limits(4), tmp_path / "trace.jsonl")
+
+
+def test_unknown_tool_error_is_actionable(tmp_path: Path) -> None:
+    """gpt-oss tried 'strings'/'objdump'/'hexdump'/'nm' as tool CALLS ~14x in one
+    sweep. 'unknown tool strings' offers nothing; the new error names the real
+    tools and points at run_command."""
+    ws = tools.Workspace(tmp_path, timeout_s=5, output_chars=2000)
+    with pytest.raises(agent_mod.ToolError) as e:
+        agent_mod._run_tool(ws, "strings", {"path": "x"}, 2000)
+    msg = str(e.value)
+    assert "unknown tool strings" in msg
+    assert "run_command" in msg and "shell binaries" in msg
+    assert "list_files" in msg and "run_python" in msg
+
+
+def test_missing_required_argument_names_the_fix(tmp_path: Path) -> None:
+    """Malformed write_file calls rendered as bare error 'path' (KeyError repr)
+    in the live trace — opaque. The guard must name the tool and the argument."""
+    ws = tools.Workspace(tmp_path, timeout_s=5, output_chars=2000)
+    with pytest.raises(agent_mod.ToolError) as e:
+        agent_mod._run_tool(ws, "write_file", {"content": "x"}, 2000)
+    msg = str(e.value)
+    assert "write_file" in msg and "'path'" in msg
+    assert "resend" in msg
+
+
+def test_prompt_does_not_claim_uninstalled_tools():
+    """V13 dropped radare2 (no bookworm candidate) but the toolkit line kept it;
+    the live trace then burned a turn on 'radare2: not found'. The prompt must
+    only name binaries that are actually in the image."""
+    assert "radare2" not in agent_mod.SYSTEM

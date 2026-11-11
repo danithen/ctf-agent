@@ -169,6 +169,33 @@ def test_expected_flag_comes_from_official_package(tmp_path: Path) -> None:
     assert not target.check(f"  {target.challenge.flag.upper()}  ")
 
 
+def test_run_python_missing_file_error_is_actionable(tmp_path: Path) -> None:
+    """Trace-evidenced: gpt-oss repeatedly called run_python pointing at files it
+    never wrote (or assumed stdin carried code). The old one-liner ('needs a .py
+    file') was retried verbatim ~60x in one sweep; the message must name the fix
+    and the heredoc alternative."""
+    ws = Workspace(tmp_path, timeout_s=15, output_chars=2000)
+    with pytest.raises(ToolError) as e:
+        ws.run_python("ghost.py", stdin="print(1)")
+    msg = str(e.value)
+    assert "ghost.py" in msg
+    assert "write_file" in msg
+    assert "stdin" in msg and "INPUT" in msg
+    assert "<<'PY'" in msg
+
+
+def test_run_command_forbidden_error_names_the_alternative(tmp_path: Path) -> None:
+    """2>/dev/null hit the blocklist ~15x in one sweep; the error should teach
+    the redirect-free idiom (filter inside the pipe), not just list the bans."""
+    ws = Workspace(tmp_path, timeout_s=15, output_chars=2000)
+    with pytest.raises(ToolError) as e:
+        ws.run_command("dd if=x bs=1 skip=0 2>/dev/null | hexdump -C")
+    msg = str(e.value)
+    assert "Pipes are fine" in msg
+    assert "head -c 3000" in msg
+    assert "2>/dev/null" in msg
+
+
 def test_run_python_allows_handout_sibling_imports(tmp_path: Path) -> None:
     """Challenge handouts ship importable modules (Collision-Course ships
     my_aes.py and its official solution imports it). `python3 -I` broke that
