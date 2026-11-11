@@ -2,8 +2,9 @@
 
 A tool-using LLM agent harness for the NYU CTF Challenge (CS 590.007, Duke). It
 solves captured-flag challenges from the
-[CTFTiny benchmark](https://arxiv.org/abs/2508.05674) by calling an LLM through
-the Duke AI Gateway (LiteLLM), running model-proposed shell and Python analysis
+[CTFTiny benchmark](https://arxiv.org/abs/2508.05674) by calling an LLM
+(LiteLLM — any OpenAI-compatible provider; the Duke AI Gateway and Ollama Cloud
+are both used in our runs), running model-proposed shell and Python analysis
 in a sandboxed workspace, and checking candidate flags against the benchmark’s
 hidden answers.
 
@@ -64,7 +65,7 @@ The capability-layer pins are in `ctf-tools.txt`. They are installed
 system-wide in the Docker image, outside the uv project environment. Base
 images are digest-pinned and `uv.lock` is frozen. Capability-layer packages are
 version-pinned, but not hash-pinned, and are updated deliberately. The image is
-about 2 GB and takes roughly 5–10 minutes to build; this is accepted in
+about 2.65 GB and takes roughly 5–10 minutes to build; this is accepted in
 exchange for the included solving tools.
 
 The deterministic pre-flight in `tools/provision.py` remains enabled by default.
@@ -185,26 +186,36 @@ the configuration it used in `configs/scored_set.json` and the adjacent
 
 ## Containers
 
-The project ships as a reproducible container. Base images are pinned by digest,
-and `uv sync --frozen` installs the versions recorded in `uv.lock`.
+The project ships as a reproducible container: rebuild it anywhere and get the
+same software (base images pinned by digest; `uv sync --frozen` installs exactly
+the versions in `uv.lock`).
 
-Build the test image and run the pytest gate (no network or tokens required):
+### From scratch (fresh clone → GUI)
+
+```bash
+git clone https://github.com/danithen/ctf-agent.git ctf-agent && cd ctf-agent
+cp .env.example .env            # then fill in LITELLM_BASE_URL / LITELLM_TOKEN / CTF_MODEL
+git clone https://github.com/NYU-LLM-CTF/CTFTiny.git benchmark
+git -C benchmark checkout f1c9531   # pin the exact commit the scored config snapshot uses
+docker compose up --build       # first build ~2.65 GB, ~5–10 min; GUI on http://localhost:5000
+```
+
+No host-side `uv sync` or bubblewrap install is needed for the container route —
+those are host-run prerequisites (see Setup). Port 5000 busy on the host? Start with
+`CTF_GUI_HOST_PORT=5001 docker compose up -d` instead. Optional gate before opening
+the GUI:
 
 ```bash
 docker build --target test -t ctf-agent:test .
+docker run --rm --security-opt seccomp=unconfined ctf-agent:test   # 63 passed, 3 skipped
 ```
 
-Build the runtime image:
+### Manual container workflow
 
 ```bash
-docker build -t ctf-agent:latest .
-```
-
-Start the GUI with Docker Compose:
-
-```bash
-docker compose up --build
-# Open http://localhost:5000
+docker build --target test -t ctf-agent:test .   # build + run the pytest gate (no network, no tokens)
+docker build -t ctf-agent:latest .               # runtime image (GUI + CLI + server)
+docker compose up --build                        # GUI on http://localhost:5000
 docker compose down
 ```
 
@@ -276,6 +287,6 @@ runs/                Per-run artifacts (git-ignored)
 ## Credits and licenses
 
 - Benchmark data and challenge loader: [CTFTiny / NYU CTF Bench](https://github.com/NYU-LLM-CTF/NYU-CTF-Bench), licensed under GPL-2.0 and associated with the AAAI ’26 paper, accessed through the `nyuctf` package.
-- LLM calls: Duke AI Gateway (LiteLLM) through `langchain-openai`; tracing via LangSmith.
+- LLM inference: via `langchain-openai` through any OpenAI-compatible gateway — the Duke AI Gateway and Ollama Cloud in our runs; tracing via LangSmith.
 - Flask, Textual, and LangChain are used as unmodified dependencies.
-- Agent logic, sandboxing, metrics, and reporting are original to this repository. See [`REPORT.md`](REPORT.md) §7 for the course-required disclosure of reused code and AI assistance.
+- Agent logic, sandboxing, metrics, and reporting are original to this repository. See [`REPORT.md`](REPORT.md) §6 for the course-required disclosure of reused code and AI assistance.
