@@ -30,8 +30,9 @@ uv sync --all-groups          # core + dev deps; add --extra bench for nyuctf
 cp .env.example .env          # then fill in tokens (never committed)
 ```
 
-Required in `.env`: `LITELLM_BASE_URL`, `LITELLM_TOKEN` (Duke AI Gateway —
-connect to Duke VPN), `CTF_MODEL`, `CTF_DATASET_JSON` (CTFTiny index), and
+Required in `.env`: `LITELLM_BASE_URL`, `LITELLM_TOKEN` (any OpenAI-compatible
+provider — Duke AI Gateway with Duke VPN, or e.g. Ollama Cloud at
+`https://ollama.com`), `CTF_MODEL`, `CTF_DATASET_JSON` (CTFTiny index), and
 optionally LangSmith keys for cloud tracing. Challenge data lives in
 `./benchmark/` (git-ignored; clone/download separately).
 
