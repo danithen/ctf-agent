@@ -35,7 +35,12 @@ class Workspace:
         p = self._resolve(path)
         if not p.is_file():
             raise ToolError("not a file")
-        text = p.read_text(errors="replace")
+        raw = p.read_bytes()
+        if b"\x00" in raw[:8192]:
+            return (f"[binary file, {len(raw)} bytes] Not shown. Use run_python to analyze it "
+                    "(e.g. subprocess 'file', 'strings', or 'objdump -d') and read only the "
+                    "parts you need.")
+        text = raw.decode("utf-8", "replace")
         return text if len(text) <= max_chars else text[:max_chars] + "\n...[truncated]"
 
     def write_file(self, path: str, content: str) -> str:

@@ -1,0 +1,26 @@
+{
+  "benchmark": "CTFTiny",
+  "benchmark_commit": "f1c9531672c45b24b7fb5f3aa44a7ac33d3602f8",
+  "challenges": [
+    "rev-baby-mult",
+    "rev-tablez",
+    "rev-beleaf",
+    "rev-rap",
+    "rev-sourcery",
+    "rev-whataxor",
+    "cry-babycrypto",
+    "cry-hybrid2",
+    "cry-collision-course",
+    "msc-ezmaze"
+  ],
+  "selection_rule": "File-only (no docker-compose.yml), string flag in challenge.json, spread of README difficulty labels. rev-checker excluded (dev challenge).",
+  "trials_per_challenge": 3,
+  "limits": {
+    "max_steps": 30,
+    "max_minutes": 15,
+    "tool_output_chars": 4000,
+    "tool_timeout_s": 60,
+    "max_output_tokens": 1024,
+    "max_total_tokens": 150000
+  }
+}

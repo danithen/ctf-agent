@@ -3,7 +3,11 @@ name = "ctf-agent"
 version = "0.1.0"
 description = "Tool-using LLM agent for the NYU CTF Challenge (CYBERSEC 590)"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "langchain-core>=1.8.0",
+    "langchain-openai>=1.7.4",
+    "langsmith>=0.14.17",
+]
 
 [project.optional-dependencies]
 bench = [

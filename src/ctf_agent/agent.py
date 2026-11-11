@@ -8,7 +8,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ctf_agent.llm import chat
+from langsmith import traceable
+
+from ctf_agent.llm import chat_langchain as chat
 from ctf_agent.runner import Target
 from ctf_agent.tools.workspace import ToolError, Workspace
 
@@ -44,7 +46,10 @@ SYSTEM = (
     "transformation in code (write_file a decode script and run_python it).\n"
     "3. Never repeat a tool call with the same result. If an approach shows no progress "
     "after two tries, change strategy.\n"
-    "4. Call submit_flag only with a value you derived from the evidence.\n"
+    "4. For a binary (ELF), do not stop at size, entry point, or section headers. Disassemble "
+    "the main logic with objdump -d and find the comparison or loop that checks the input; "
+    "recover the expected value or transformation from that code.\n"
+    "5. Call submit_flag only with a value you derived from the evidence.\n"
     "You have a limited number of steps; spend them on analysis."
 )
 
@@ -56,6 +61,7 @@ class Limits:
     tool_output_chars: int
     tool_timeout_s: float
     max_output_tokens: int
+    max_total_tokens: int | None = None
 
 
 @dataclass
@@ -71,6 +77,20 @@ class Result:
 
 def _sum(a: int | None, b: int | None) -> int | None:
     return None if a is None or b is None else a + b
+
+
+@traceable(name="tool", run_type="tool")
+def _run_tool(ws: Workspace, name: str, args: dict[str, Any], max_chars: int) -> str:
+    """Dispatch one workspace tool. Traced so each call appears in LangSmith."""
+    if name == "list_files":
+        return ws.list_files()
+    if name == "read_file":
+        return ws.read_file(args["path"], max_chars)
+    if name == "run_python":
+        return ws.run_python(args["path"], args.get("stdin"))
+    if name == "write_file":
+        return ws.write_file(args["path"], args["content"])
+    raise ToolError(f"unknown tool {name}")
 
 
 def run_agent(target: Target, workspace: Path, limits: Limits, trace_path: Path) -> Result:
@@ -96,10 +116,16 @@ def run_agent(target: Target, workspace: Path, limits: Limits, trace_path: Path)
     status = "step_limit"
     verified = False
     steps = 0
+    seen_calls: set[tuple[str, str]] = set()
     try:
         for steps in range(1, limits.max_steps + 1):
             if time.monotonic() - t0 > limits.max_seconds:
                 status = "timeout"
+                break
+            if (limits.max_total_tokens is not None and in_tok is not None
+                    and out_tok is not None
+                    and in_tok + out_tok >= limits.max_total_tokens):
+                status = "token_budget"
                 break
             r = chat(messages, TOOLS, max_tokens=limits.max_output_tokens)
             in_tok = _sum(in_tok, r.input_tokens)
@@ -119,15 +145,14 @@ def run_agent(target: Target, workspace: Path, limits: Limits, trace_path: Path)
                 name = c["function"]["name"]
                 try:
                     args = json.loads(c["function"].get("arguments") or "{}")
-                    if name == "list_files":
-                        out = ws.list_files()
-                    elif name == "read_file":
-                        out = ws.read_file(args["path"], limits.tool_output_chars)
-                    elif name == "run_python":
-                        out = ws.run_python(args["path"], args.get("stdin"))
-                    elif name == "write_file":
-                        out = ws.write_file(args["path"], args["content"])
-                    elif name == "submit_flag":
+                    sig = (name, json.dumps(args, sort_keys=True))
+                    if sig in seen_calls and name != "submit_flag":
+                        raise ToolError(
+                            "you already made this exact call and got the result above; "
+                            "it will not change. Change your approach: different file, "
+                            "different method, or submit your best candidate.")
+                    seen_calls.add(sig)
+                    if name == "submit_flag":
                         ok = target.check(str(args.get("flag", "")))
                         out = "CORRECT" if ok else "INCORRECT"
                         log("submission", verified=ok)
@@ -136,7 +161,7 @@ def run_agent(target: Target, workspace: Path, limits: Limits, trace_path: Path)
                             status = "solved"
                             done = True
                     else:
-                        raise ToolError(f"unknown tool {name}")
+                        out = _run_tool(ws, name, args, limits.tool_output_chars)
                 except (ToolError, KeyError, json.JSONDecodeError) as e:
                     out = f"error: {e}"
                 log("tool", name=name, result=out)
