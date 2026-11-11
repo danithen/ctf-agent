@@ -47,11 +47,18 @@ Forensics showed that several failures were due to environment starvation (e.g.,
 *   **Dynamic Provisioning:** We developed a workspace-derived pre-flight provisioner (`provision.py`) that installs whitelisted dependencies based on files visible to the agent, ensuring the environment mirrors the challenge's requirements without leaking solution data.
 *   **Import Resolution:** We resolved a critical issue where `python3 -I` isolated scripts from sibling imports by transitioning to `python3 -E -s`.
 
+### 2.4 Opaque Error Surfaces (repeat traps)
+Config-D trace mining (200-step budget) exposed a costlier class: tool errors that were *honest but unactionable*, which the model then retried verbatim until the budget died.
+*   **`run_python` contract:** ~60 attempts passed code via `stdin` on non-existent files and received only "run_python needs a .py file". The error now names the fix (write the file first; `stdin` is program *input*) and the working inline idiom (`python3 - <<'PY' ... PY`).
+*   **Hallucinated tool calls:** ~14 turns were lost calling shell binaries (`strings`, `objdump`, `hexdump`, `nm`) as if they were agent tools. "unknown tool X" now enumerates the real tools and redirects to `run_command`.
+*   **Shell-redirect habits:** `2>/dev/null` hit the command blocklist ~15 times per sweep; the error now teaches the redirect-free idiom (filter inside the pipe).
+*   **Malformed arguments and prompt lies:** bare `KeyError('path')` outputs became tool+argument-naming errors; and the SYSTEM prompt stopped advertising `radare2` (removed from the image in V13) after a live `radare2: not found` turn, eliminating claims the environment cannot back.
+
 ---
 
 ## 3. Ablation Study and Testing
 
-Each system modification was piloted on a specific challenge before being integrated. The following table summarizes the iterative development (V1–V13).
+Each system modification was piloted on a specific challenge before being integrated. The following table summarizes the iterative development (V1–V14).
 
 | Version | Modification | Target Challenge | Result | Decision |
 |---|---|---|---|---|
@@ -64,6 +71,7 @@ Each system modification was piloted on a specific challenge before being integr
 | **V11** | Import fix (`-E -s` vs `-I`) | `Collision-Course` | Resolved `ModuleNotFoundError` | **Kept** |
 | **V12** | Workspace-derived provisioning | `msc-ezmaze` | Automated dep. management | **Kept** |
 | **V13** | Baked-in Capability Layer | `msc-ezmaze` | Eliminated env. starvation | **Kept** |
+| **V14** | Actionable tool errors + prompt truth | Config-D sweep (`rev-*`) | Broke verbatim retry traps (~90 wasted steps/sweep) | **Kept** |
 
 **Validation:** The final scaffolding was validated using `tests/test_agent_loop.py` with a scripted mock model, ensuring that nudge-logic, elision, and coaching were functionally correct before applying them to LLMs.
 
