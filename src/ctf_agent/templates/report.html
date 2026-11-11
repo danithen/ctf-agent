@@ -3,12 +3,24 @@
 {% block content %}
 <div class="page-head">
   <h1>Report</h1>
-  <p>Aggregated metrics across every attempt logged in <span class="mono">{{ results_root }}</span>.</p>
+  {% if scope == 'history' %}
+    <p>Full history — every attempt persisted in <span class="mono">{{ results_root }}</span>.
+       <a href="{{ url_for('report') }}">Show this session only</a></p>
+  {% else %}
+    <p>Session report — this app's runs since launch (clears when the app exits).
+       {{ n_disk }} attempt{{ '' if n_disk == 1 else 's' }} on disk overall.
+       <a href="{{ url_for('report', scope='history') }}">Show full history</a></p>
+  {% endif %}
 </div>
 
 {% if not data or not data.overall.get('attempts') %}
   <div class="card" style="padding:34px; text-align:center;">
-    <p class="muted" style="margin:0 0 14px;">No attempts recorded yet. Run some challenges to build a report.</p>
+    <p class="muted" style="margin:0 0 14px;">
+      {% if scope == 'history' %}No attempts recorded yet. Run some challenges to build a report.
+      {% else %}No attempts this session yet. Runs from previous sessions stay on disk in
+      <span class="mono">{{ results_root }}/attempts.jsonl</span> — view them with
+      <a href="{{ url_for('report', scope='history') }}">Show full history</a>.{% endif %}
+    </p>
     <a class="btn ghost" href="{{ url_for('index') }}">Go to Selection</a>
   </div>
 {% else %}

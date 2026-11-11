@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from flask import (  # noqa: F401  (url_for used in templates too)
+from flask import (
     Flask,
     flash,
     jsonify,
@@ -39,10 +39,8 @@ from ctf_agent.config import load_env
 from ctf_agent.metrics import estimate_cost, load_attempts, summarize_attempts
 from ctf_agent.runner import load_target, new_run_id, stage_workspace
 
-try:  # read .env once at import so `flask run` works too
-    load_env()
-except Exception:  # noqa: BLE001
-    pass
+# Read .env once at import so `flask run` works too (config.load_env never raises).
+load_env()
 
 # ---------------------------------------------------------------------------
 #  Configuration
@@ -116,6 +114,7 @@ class Job:
 
 JOBS: dict[str, Job] = {}
 BATCH: list[str] = []                     # ordered ids of the most recent batch
+SESSION_ATTEMPTS: list[dict[str, Any]] = []  # attempts made during this app session
 _work: queue.Queue[str] = queue.Queue()
 _lock = threading.Lock()
 _worker_started = False
@@ -200,6 +199,10 @@ def _execute(job: Job) -> None:
         "elapsed_s": (result.elapsed_s if result else job.elapsed_s),
         "trace_file": str(trace),
     }
+    # Session report: the Report tab only shows attempts made since the last
+    # app start; the disk file keeps the permanent, cross-session record.
+    with _lock:
+        SESSION_ATTEMPTS.append(rec)
     try:
         run_dir.mkdir(parents=True, exist_ok=True)
         (run_dir / "summary.json").write_text(json.dumps(rec, indent=2))
@@ -380,9 +383,19 @@ def run_sync(cid: str):
 # ---------------------------------------------------------------------------
 @app.route("/report")
 def report():
-    attempts = load_attempts(RESULTS_ROOT)
+    # Default scope is the current session: it starts empty every time the app
+    # is launched and clears out again when the process dies. Pass
+    # ?scope=history to see every attempt persisted for this results root.
+    scope = "history" if request.args.get("scope") == "history" else "session"
+    disk_attempts = load_attempts(RESULTS_ROOT)
+    if scope == "history":
+        attempts = disk_attempts
+    else:
+        with _lock:
+            attempts = list(SESSION_ATTEMPTS)
     data = summarize_attempts(attempts) if attempts else None
     return render_template("report.html", data=data, n_attempts=len(attempts),
+                           scope=scope, n_disk=len(disk_attempts),
                            results_root=RESULTS_ROOT, active_tab="report")
 
 

@@ -32,6 +32,7 @@ def env(monkeypatch, tmp_path: Path):
     results = tmp_path / "results"
     monkeypatch.setattr(flask_gui, "RUNS_ROOT", runs)
     monkeypatch.setattr(flask_gui, "RESULTS_ROOT", results)
+    flask_gui.SESSION_ATTEMPTS.clear()          # fresh app session per test
     monkeypatch.setattr(flask_gui, "new_run_id", lambda cid: f"{cid}-test")
     monkeypatch.setattr(flask_gui, "run_agent", lambda *a, **k: DummyResult())
 
@@ -58,10 +59,10 @@ def test_selection_lists_challenges(env):
 
 
 def test_run_start_creates_attempt_and_summary(env):
-    runs, results = env
+    _runs, results = env
     challenge = flask_gui.load_challenges()[0] if flask_gui.load_challenges() else "demo"
     client = app.test_client()
-    resp = client.post("/run/start", data={"challenge_ids": challenge})
+    client.post("/run/start", data={"challenge_ids": challenge})
     # Background job queued; poll the API until it finishes.
     job_id = next(iter(flask_gui.JOBS))
     for _ in range(100):
@@ -80,6 +81,7 @@ def test_run_start_creates_attempt_and_summary(env):
 
 
 def test_report_renders_metrics(env):
+    """?scope=history shows every attempt persisted under the results root."""
     _, results = env
     results.mkdir(parents=True, exist_ok=True)
     (results / "attempts.jsonl").write_text(json.dumps({
@@ -89,15 +91,48 @@ def test_report_renders_metrics(env):
         "elapsed_s": 12.0,
     }) + "\n")
     client = app.test_client()
-    resp = client.get("/report")
+    resp = client.get("/report?scope=history")
     assert resp.status_code == 200
     html = resp.get_data(as_text=True)
     for needle in ["Pass@k", "pass@1", "Solved", "demo"]:
         assert needle in html
+    # Default scope (session) stays empty when nothing ran in this session.
+    resp = client.get("/report")
+    assert "No attempts this session yet" in resp.get_data(as_text=True)
+
+
+def test_report_is_session_scoped_and_clears_after_restart(env):
+    """Default report shows only this session's runs; disk history remains."""
+    _, results = env
+    results.mkdir(parents=True, exist_ok=True)
+    (results / "attempts.jsonl").write_text(json.dumps({
+        "run_id": "old-t1", "challenge_id": "from-an-earlier-session", "trial": 1,
+        "verified": False, "status": "no_flag",
+    }) + "\n")
+    challenge = flask_gui.load_challenges()[0] if flask_gui.load_challenges() else "demo"
+    client = app.test_client()
+    client.post("/run/start", data={"challenge_ids": challenge})
+    job_id = next(iter(flask_gui.JOBS))
+    for _ in range(100):
+        payload = client.get(f"/api/jobs?ids={job_id}").get_json()["jobs"][0]
+        if payload["status"] in {"done", "error"}:
+            break
+        import time
+
+        time.sleep(0.05)
+    # Session scope: the new run appears, the old-session run does not.
+    html = client.get("/report").get_data(as_text=True)
+    assert challenge in html
+    assert "from-an-earlier-session" not in html
+    assert "4 attempts" not in html  # session banner counts disk rows separately
+    assert "2 attempts on disk overall" in html  # seeded row + this session's run
+    # History scope still shows both — the disk record was never cleared.
+    html = client.get("/report?scope=history").get_data(as_text=True)
+    assert "from-an-earlier-session" in html and challenge in html
 
 
 def test_report_run_detail(env):
-    runs, _ = env
+    _runs, _ = env
     run_dir = flask_gui.RUNS_ROOT / "demo-test-t1"
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "summary.json").write_text(json.dumps({"challenge_id": "demo"}))
