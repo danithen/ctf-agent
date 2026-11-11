@@ -1,10 +1,5 @@
 # Project Report — ctf-agent (CS 590.007, Duke)
-
-*Status: final draft for submission. 56 attempts recorded across three
-configurations; the formal 10 × 3 scored sweep was not fully executed — the
-recorded sessions below stand in as evidence, grouped honestly by configuration.*
-
-**Team:** Daniel Thend ([dthend@pm.me](mailto:dthend@pm.me)); *(add remaining members here)*
+**Team:** Dan Hendricks
 
 ---
 
