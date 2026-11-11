@@ -11,7 +11,7 @@ The objective of this project was to develop a robust agentic framework capable 
 ### 1.1 Architectural Overview
 The system is partitioned into three primary domains: the **Operator** (interface), the **Orchestration Layer** (retry and state management), and the **Agent Loop** (the execution cycle). 
 
-*(Insert Mermaid Diagram Here)*
+<img width="2400" height="1830" alt="image" src="https://github.com/user-attachments/assets/dd59c785-7c0a-40bc-91d9-9ae0c1b30b6a" />
 
 The architecture prioritizes security and verification integrity through the following mechanisms:
 *   **Security Boundary:** All tools are executed within a **bubblewrap jail**, featuring a restricted workspace-only filesystem, no network access, and a sanitized environment.
