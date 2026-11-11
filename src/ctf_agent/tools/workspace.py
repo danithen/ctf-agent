@@ -61,7 +61,11 @@ class Workspace:
         if not p.is_file() or p.suffix != ".py":
             raise ToolError("run_python needs a .py file in the workspace")
         r = run_sandboxed(
-            ["python3", "-I", str(p.relative_to(self.root))],
+            # -E -s (not -I): the env is already curated by the jail (no
+            # PYTHON* vars set), but -I implies -P, which drops the script's
+            # directory from sys.path — breaking sibling imports of modules
+            # the challenge handout ships (e.g. Collision-Course's my_aes.py).
+            ["python3", "-E", "-s", str(p.relative_to(self.root))],
             self.root,
             timeout_s=self.timeout_s,
             output_chars=self.output_chars,

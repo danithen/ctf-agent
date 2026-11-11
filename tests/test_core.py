@@ -167,3 +167,15 @@ def test_expected_flag_comes_from_official_package(tmp_path: Path) -> None:
     assert target.expected_flag == target.challenge.flag
     assert target.check(target.challenge.flag)
     assert not target.check(f"  {target.challenge.flag.upper()}  ")
+
+
+def test_run_python_allows_handout_sibling_imports(tmp_path: Path) -> None:
+    """Challenge handouts ship importable modules (Collision-Course ships
+    my_aes.py and its official solution imports it). `python3 -I` broke that
+    (implied -P dropped the script dir from sys.path); -E -s must keep it."""
+    ws = Workspace(tmp_path, timeout_s=15, output_chars=2000)
+    (tmp_path / "handout_lib.py").write_text("MAGIC = 0x539\n")
+    (tmp_path / "use_it.py").write_text(
+        "import handout_lib\nprint(hex(handout_lib.MAGIC))\n")
+    out = ws.run_python("use_it.py")
+    assert "0x539" in out

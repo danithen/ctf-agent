@@ -32,8 +32,24 @@ provides a web UI (challenge selection / live runtime feed / report) and
 ```bash
 uv sync --all-groups          # core + dev deps; add --extra bench for nyuctf
 cp .env.example .env          # then fill in tokens (never committed)
-sudo apt install bubblewrap binutils unzip file   # sandbox + binary-analysis staples
+sudo apt install bubblewrap binutils unzip file bzip2 xz-utils xxd   # sandbox + binary-analysis staples
 ```
+
+### Curated environment (what the agent can rely on)
+
+Tool scripts run under the plain `python3` the sandbox resolves (`-E -s`, workspace
+as cwd, so handout sibling modules import — several CTFTiny handouts ship importable
+`.py` files). The environment is curated for the binary-analysis staples the traces
+proved the agent reaches for (objdump, strings, nm, hexdump/xxd, file, unzip and the
+compression tools) — these are installed by the Dockerfile; install the same list on
+the host so host and container behave identically.
+
+Deliberately **not** provided: no network (so no `pip` at run time), no ML packages
+(`torch` etc. — too heavy for the image; ML-artifact handouts are a known limitation),
+and no extra solver libraries beyond the standard library. Crypto challenges in the
+scored set so far solved with stdlib `hashlib`/`base64` alone; add a package to the
+image only when a run fails on a missing module and a lighter alternative doesn't
+exist (evidence-based curation — see `docs/architecture.md`).
 
 Required in `.env`: `LITELLM_BASE_URL`, `LITELLM_TOKEN` (any OpenAI-compatible
 provider — Duke AI Gateway with Duke VPN, or e.g. Ollama Cloud at
