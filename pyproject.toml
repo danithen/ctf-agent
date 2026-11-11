@@ -10,6 +10,7 @@ dependencies = [
     "textual>=8.2.8",
     "textual-plotext>=1.0.1",
     "flask>=3.0",
+    "python-dotenv>=1.0",
 ]
 
 [project.optional-dependencies]
