@@ -58,9 +58,12 @@ API key / limits at runtime):
 uv run ctf-flask-gui                       # http://127.0.0.1:5000
 ```
 
-The **Config** tab updates the model ID, API key, gateway URL, and all run limits
-for the current session (optionally persisted to `.env`); “Test connection” verifies
-the gateway without spending tokens.
+The **Config** tab updates the model ID (dropdown from the gateway catalog when
+reachable, text box otherwise), API key, gateway URL, and all run limits — including
+**retries per challenge** (a failed attempt re-runs on a clean slate up to _N_ extra
+times; all attempts are recorded, and once one solves, the rest are skipped) — for the
+current session (optionally persisted to `.env`); “Test connection” verifies the
+gateway without spending tokens.
 
 Metrics from run artifacts:
 

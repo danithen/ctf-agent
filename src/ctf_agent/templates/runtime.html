@@ -17,6 +17,9 @@
   <div class="card" id="job-{{ job.id }}" data-job="{{ job.id }}" style="overflow:hidden;">
     <div class="job-head" style="display:flex; align-items:center; gap:14px; padding:12px 16px; border-bottom:1px solid var(--border); flex-wrap:wrap;">
       <span class="mono" style="font-weight:700; font-size:13.5px;">{{ job.cid }}</span>
+      {% if job.max_attempts > 1 %}
+      <span class="muted" style="font-size:12px;" title="up to {{ job.max_attempts }} clean-slate attempts">attempt {{ job.attempt }}/{{ job.max_attempts }}</span>
+      {% endif %}
       <span class="status {{ job.status }}" data-role="status">{{ job.status }}</span>
       <span data-role="verdict"></span>
       <span class="spacer" style="flex:1"></span>
@@ -115,7 +118,11 @@
     const v = head.querySelector('[data-role="verdict"]');
     if (job.status === 'done' || job.status === 'error') {
       const ok = job.solved;
-      v.innerHTML = `<span class="badge ${ok ? 'ok' : 'err'}">${ok ? 'SOLVED' : esc(job.verdict || 'FAILED')}</span>`;
+      const skip = !ok && job.verdict === 'skipped';
+      const txt = ok ? 'SOLVED'
+        : skip ? 'skipped — solved in an earlier attempt'
+        : esc(job.verdict || 'FAILED');
+      v.innerHTML = `<span class="badge ${ok ? 'ok' : (skip ? 'warn' : 'err')}">${txt}</span>`;
     }
   }
 

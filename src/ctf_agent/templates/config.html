@@ -67,6 +67,11 @@
                  value="{{ limits.tool_timeout_s }}" placeholder="60">
         </label>
         <label style="display:grid; gap:4px;">
+          <span class="muted">Retries per challenge</span>
+          <input class="input" type="text" inputmode="numeric" name="retries"
+                 value="{{ retries }}" placeholder="0">
+        </label>
+        <label style="display:grid; gap:4px;">
           <span class="muted">Token budget <em>(blank = default · 0/none = unlimited)</em></span>
           <input class="input" type="text" inputmode="numeric" name="max_total_tokens"
                  value="{{ limits.max_total_tokens }}" placeholder="150000">

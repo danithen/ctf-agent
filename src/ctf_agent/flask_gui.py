@@ -190,6 +190,15 @@ def config():
                 flash(f"'{field}' must be positive.", "error")
                 return redirect(url_for("config"))
             ints[env_key] = str(n)
+        retries_raw = (request.form.get("retries") or "").strip()
+        if retries_raw:
+            try:
+                if int(retries_raw) < 0:
+                    raise ValueError
+            except ValueError:
+                flash("'retries' must be 0 or a positive integer.", "error")
+                return redirect(url_for("config"))
+            updates["CTF_MAX_RETRIES"] = retries_raw
         total_raw = (request.form.get("max_total_tokens") or "").strip()
         total: str | None = None
         if total_raw and total_raw.lower() not in {"0", "none"}:
@@ -235,7 +244,13 @@ def config():
             "tool_timeout_s": os.environ.get("CTF_TOOL_TIMEOUT_S", ""),
             "max_total_tokens": os.environ.get("CTF_MAX_TOTAL_TOKENS", ""),
         },
+        retries=os.environ.get("CTF_MAX_RETRIES", ""),
     )
+
+
+def _max_retries() -> int:
+    """Retries per challenge (Config tab override); 0 = run once, no retries."""
+    return max(0, _env_int("CTF_MAX_RETRIES", 0))
 
 
 @app.route("/config/test", methods=["POST"])
@@ -255,6 +270,9 @@ class Job:
     cid: str
     run_id: str
     run_dir: Path
+    base_id: str = ""                  # run-id family prefix shared by all retries
+    attempt: int = 1
+    max_attempts: int = 1
     status: str = "queued"          # queued | running | done | error
     verdict: str = ""
     solved: bool = False
@@ -304,9 +322,16 @@ def _tail_trace(job: Job, trace: Path, stop: threading.Event) -> None:
 def _execute(job: Job) -> None:
     """Run one attempt synchronously (called on the worker thread)."""
     job.status = "running"
-    trial = 1
+    if job.attempt > 1:  # retries only start when every earlier attempt failed
+        prior = [JOBS.get(f"{job.base_id}-t{k}") for k in range(1, job.attempt)]
+        if any(p is not None and p.solved for p in prior):
+            job.status = "done"
+            job.verdict = "skipped"
+            return  # no workspace, no trace, no attempt row — nothing ran
+    trial = job.attempt
     dataset = os.environ.get("CTF_DATASET_JSON", "")
     run_dir = job.run_dir
+    run_dir.mkdir(parents=True, exist_ok=True)
     trace = run_dir / "trace.jsonl"
     started = time.monotonic()
     stop = threading.Event()
@@ -389,15 +414,19 @@ def _ensure_worker() -> None:
 
 
 def _start_jobs(cids: list[str]) -> list[Job]:
+    """Create one job per attempt up front: -t1 runs, -t2.. only if -t1 failed.
+    Every attempt starts from a clean slate (fresh workspace, fresh trace)."""
     jobs: list[Job] = []
     for cid in cids:
-        run_id = f"{new_run_id(cid)}-t1"
-        run_dir = RUNS_ROOT / run_id
-        run_dir.mkdir(parents=True, exist_ok=True)
-        job = Job(cid=cid, run_id=run_id, run_dir=run_dir)
-        JOBS[run_id] = job
-        jobs.append(job)
-        _work.put(run_id)
+        base = new_run_id(cid)
+        max_attempts = _max_retries() + 1
+        for k in range(1, max_attempts + 1):
+            run_id = f"{base}-t{k}"
+            job = Job(cid=cid, run_id=run_id, run_dir=RUNS_ROOT / run_id,
+                      base_id=base, attempt=k, max_attempts=max_attempts)
+            JOBS[run_id] = job
+            jobs.append(job)
+            _work.put(run_id)
     with _lock:
         BATCH.clear()
         BATCH.extend(j.run_id for j in jobs)
@@ -453,6 +482,8 @@ def _job_payload(db: Job) -> dict[str, Any]:
         "tool_calls": db.tool_calls,
         "elapsed_s": db.elapsed_s,
         "events": out_events,
+        "attempt": db.attempt,
+        "max_attempts": db.max_attempts,
     }
 
 
@@ -522,10 +553,12 @@ def run_sync(cid: str):
     if not dataset:
         flash("CTF_DATASET_JSON is not set — cannot load challenges.", "err")
         return redirect(url_for("index"))
-    run_id = f"{new_run_id(cid)}-t1"
+    base = new_run_id(cid)
+    run_id = f"{base}-t1"
     run_dir = RUNS_ROOT / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
-    job = Job(cid=cid, run_id=run_id, run_dir=run_dir)
+    job = Job(cid=cid, run_id=run_id, run_dir=run_dir,
+              base_id=base, attempt=1, max_attempts=1)
     JOBS[run_id] = job
     _execute(job)  # run inline, no queueing
     return redirect(url_for("run_report", run_id=run_id))

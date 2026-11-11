@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 
 import pytest
@@ -13,7 +14,7 @@ from ctf_agent.flask_gui import app
 
 ENV_KEYS = ["LITELLM_TOKEN", "LITELLM_BASE_URL", "CTF_MODEL", "CTF_MAX_STEPS",
             "CTF_MAX_MINUTES", "CTF_MAX_OUTPUT_TOKENS", "CTF_TOOL_OUTPUT_CHARS",
-            "CTF_TOOL_TIMEOUT_S", "CTF_MAX_TOTAL_TOKENS"]
+            "CTF_TOOL_TIMEOUT_S", "CTF_MAX_TOTAL_TOKENS", "CTF_MAX_RETRIES"]
 
 
 class DummyResult:
@@ -245,3 +246,104 @@ def test_config_model_falls_back_to_text_input(env, env_guard, monkeypatch):
     html = app.test_client().get("/config").get_data(as_text=True)
     assert "<select" not in html
     assert 'name="model"' in html and 'value="fallback-model"' in html
+
+
+# ---------------------------------------------------------------------------
+#  Retries — clean-slate re-runs until solved (or attempts exhausted)
+# ---------------------------------------------------------------------------
+def _drain(timeout: float = 15.0) -> None:
+    """Wait until every enqueued job reached a terminal status."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        with flask_gui._lock:
+            jobs = list(flask_gui.JOBS.values())
+        if jobs and all(j.status in {"done", "error"} for j in jobs):
+            return
+        time.sleep(0.02)
+    pytest.fail(f"worker did not finish within {timeout}s")
+
+
+def _dummy_run(solved: bool, status: str):
+    r = DummyResult()
+    r.verified = solved
+    r.status = status
+    return r
+
+
+def test_start_jobs_precreates_retry_family(env, env_guard, monkeypatch):
+    monkeypatch.setenv("CTF_MAX_RETRIES", "2")
+    flask_gui.JOBS.clear()
+    flask_gui.SESSION_ATTEMPTS.clear()
+    app.test_client().post("/run/start", data={"challenge_ids": ["rev-x"]})
+    ids = sorted(flask_gui.JOBS)
+    assert ids == ["rev-x-test-t1", "rev-x-test-t2", "rev-x-test-t3"]
+    assert [flask_gui.JOBS[i].attempt for i in ids] == [1, 2, 3]
+    assert all(j.max_attempts == 3 and j.status == "queued"
+               for j in flask_gui.JOBS.values())
+    _drain()
+
+
+def test_retry_runs_until_solved(env, env_guard, monkeypatch):
+    """Two failures, then success: three real attempts recorded, last solved."""
+    results = [_dummy_run(False, "no_flag"), _dummy_run(False, "token_budget"),
+               _dummy_run(True, "solved")]
+    monkeypatch.setattr(flask_gui, "run_agent", lambda *a, **k: results.pop(0))
+    monkeypatch.setenv("CTF_MAX_RETRIES", "2")
+    flask_gui.JOBS.clear()
+    flask_gui.SESSION_ATTEMPTS.clear()
+    app.test_client().post("/run/start", data={"challenge_ids": ["rev-x"]})
+    _drain()
+    order = ["rev-x-test-t1", "rev-x-test-t2", "rev-x-test-t3"]
+    assert [flask_gui.JOBS[i].verdict for i in order] == ["no_flag", "token_budget", "SOLVED"]
+    assert [flask_gui.JOBS[i].solved for i in order] == [False, False, True]
+    rows = (flask_gui.RESULTS_ROOT / "attempts.jsonl").read_text().splitlines()
+    recs = [json.loads(r) for r in rows if r.strip()]
+    assert [r["trial"] for r in recs] == [1, 2, 3]
+    assert [r["verified"] for r in recs] == [False, False, True]
+    assert len(flask_gui.SESSION_ATTEMPTS) == 3
+
+
+def test_retry_skips_remaining_after_success(env, env_guard, monkeypatch):
+    calls: list[int] = []
+
+    def ra(*a, **k):
+        calls.append(1)
+        return _dummy_run(True, "solved")
+
+    monkeypatch.setattr(flask_gui, "run_agent", ra)
+    monkeypatch.setenv("CTF_MAX_RETRIES", "2")
+    flask_gui.JOBS.clear()
+    flask_gui.SESSION_ATTEMPTS.clear()
+    app.test_client().post("/run/start", data={"challenge_ids": ["rev-x"]})
+    _drain()
+    assert len(calls) == 1                                   # solved on attempt 1
+    t2, t3 = flask_gui.JOBS["rev-x-test-t2"], flask_gui.JOBS["rev-x-test-t3"]
+    assert t2.status == "done" and t2.verdict == "skipped"
+    assert t3.status == "done" and t3.verdict == "skipped"
+    assert [j.solved for j in (t2, t3)] == [False, False]
+    rows = [r for r in (flask_gui.RESULTS_ROOT / "attempts.jsonl").read_text().splitlines() if r]
+    assert len(rows) == 1                                    # skipped attempts record nothing
+
+
+def test_zero_retries_runs_once(env, env_guard, monkeypatch):
+    monkeypatch.delenv("CTF_MAX_RETRIES", raising=False)
+    flask_gui.JOBS.clear()
+    flask_gui.SESSION_ATTEMPTS.clear()
+    app.test_client().post("/run/start", data={"challenge_ids": ["rev-x"]})
+    _drain()
+    assert sorted(flask_gui.JOBS) == ["rev-x-test-t1"]
+    assert flask_gui.JOBS["rev-x-test-t1"].verdict == "no_flag"   # dummy never solves
+    rows = [r for r in (flask_gui.RESULTS_ROOT / "attempts.jsonl").read_text().splitlines() if r]
+    assert len(rows) == 1
+
+
+def test_config_retries_field(env, env_guard, monkeypatch):
+    client = app.test_client()
+    resp = client.post("/config", data={"retries": "2"})
+    assert resp.status_code == 302
+    assert os.environ.get("CTF_MAX_RETRIES") == "2"
+    resp = client.post("/config", data={"retries": "-1"})
+    html = client.get("/config").get_data(as_text=True)      # error flashed
+    assert "must be 0 or a positive integer" in html
+    client.post("/config", data={"retries": "3", "remember": "on"})
+    assert "CTF_MAX_RETRIES=3" in flask_gui.DOTENV_PATH.read_text()
