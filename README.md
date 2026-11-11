@@ -1,166 +1,226 @@
 # ctf-agent
 
-A tool-using LLM agent harness for the NYU CTF Challenge (CS 590.007, Duke).
-The agent solves captured-flag challenges from the [CTFTiny benchmark](https://arxiv.org/abs/2508.05674)
-by calling an LLM through the Duke AI Gateway (LiteLLM), running model-proposed
-shell/python analysis inside a sandboxed workspace, and verifying candidate flags
-against the benchmark's hidden answers.
+A tool-using LLM agent harness for the NYU CTF Challenge (CS 590.007, Duke). It
+solves captured-flag challenges from the
+[CTFTiny benchmark](https://arxiv.org/abs/2508.05674) by calling an LLM through
+the Duke AI Gateway (LiteLLM), running model-proposed shell and Python analysis
+in a sandboxed workspace, and checking candidate flags against the benchmark’s
+hidden answers.
 
-**Project report:** see [`REPORT.md`](REPORT.md) (architecture, experiments, full results table, contributions, citations).
+See [`REPORT.md`](REPORT.md) for the architecture, experiments, full results
+table, contributions, and citations.
 
-## Architecture (one paragraph)
+## How it works
 
-`ctf_agent.runner` loads benchmark targets and verifies flags (answers never enter
-the agent's context). `ctf_agent.agent` runs the chat loop: a system prompt
-encoding verified sandbox facts, a tool belt (`list_files`, `read_file`,
-`run_command`, `run_python`, `write_file`, `submit_flag`), a repeat-call guard,
-automatic context elision near the token budget, nudge-not-kill handling of
-prose-only replies, budget-aware coaching near the step limit. All tool
-execution goes through `tools/sandbox.py` (workspace-confined, empty env, hard
-timeouts, truncated output). Every model/tool call is traced to a local
-`trace.jsonl` and LangSmith. Traces carry a `meta` first line (challenge,
-run_id, trial, model) and a `done` last line (status, verified, steps); the
-LangSmith root run takes the same metadata plus `[challenge, attempt]` tags,
-so traces are filterable per challenge.
-`ctf_agent.metrics` / `aggregate` compute pass@k,
-token, cost, and status summaries from `attempts.jsonl`. `ctf_agent.flask_gui`
-provides a web UI (challenge selection / live runtime feed / report) and
-`ctf_agent.batch` runs the scored set headlessly.
+`ctf_agent.runner` loads benchmark targets and verifies submitted flags. The
+answers are never included in the agent’s context. `ctf_agent.agent` manages the
+chat loop and provides a tool belt: `list_files`, `read_file`, `run_command`,
+`run_python`, `write_file`, and `submit_flag`. The loop includes a repeat-call
+guard, automatic context elision near the token budget, nudges for prose-only
+replies, and budget-aware coaching near the step limit.
+
+All tool execution goes through `tools/sandbox.py`, which confines access to the
+workspace, uses an empty environment, enforces hard timeouts, and truncates
+output. Model and tool calls are recorded in a local `trace.jsonl` and in
+LangSmith. Each trace starts with a `meta` record containing the challenge,
+`run_id`, trial, and model, and ends with a `done` record containing the status,
+verification result, and step count. The LangSmith root run receives the same
+metadata and `[challenge, attempt]` tags for filtering.
+
+`ctf_agent.metrics` and `ctf_agent.aggregate` compute pass@k, token, cost, and
+status summaries from `attempts.jsonl`. `ctf_agent.flask_gui` provides a web UI
+for challenge selection, live runtime updates, and reports. `ctf_agent.batch`
+runs the scored set headlessly.
 
 ## Setup
 
 ```bash
-uv sync --all-groups          # core + dev deps; add --extra bench for nyuctf
-cp .env.example .env          # then fill in tokens (never committed)
-sudo apt install bubblewrap binutils unzip file bzip2 xz-utils xxd   # sandbox + binary-analysis staples
+uv sync --all-groups          # Core and development dependencies; add --extra bench for nyuctf
+cp .env.example .env          # Fill in tokens; never commit this file
+sudo apt install bubblewrap binutils unzip file bzip2 xz-utils xxd
 ```
 
-### Curated environment (what the agent can rely on)
+The benchmark data lives in `./benchmark/` and is git-ignored; clone or download
+it separately.
 
-Tool scripts run under the plain `python3` the sandbox resolves (`-E -s`, workspace
-as cwd, so handout sibling modules import — several CTFTiny handouts ship importable
-`.py` files).
+### Curated environment
 
-The default image (`ctf-agent:latest`) carries the full CTF toolkit, baked in: the
-binary-analysis staples (objdump, strings, nm/readelf, hexdump/xxd, file, unzip,
-bzip2/xz) plus gdb, binwalk, exiftool, steghide, outguess, john, openssl,
-socat/nc, poppler-utils — and a pinned python capability layer (numpy, torch CPU,
-pycryptodome, sympy, z3-solver, gmpy2, pwntools). Rationale: the evaluation should
-measure the agent's reasoning, not its ability to hand-roll around a missing
-dependency — a confound that cost a real run (msc-ezmaze burned its budget
-decoding torch's pickle format by hand). The SYSTEM prompt lists the toolkit so
-the agent doesn't have to probe for it.
+Tool scripts run with the plain `python3` resolved by the sandbox, using `-E
+-s` and the workspace as the working directory. This allows handout sibling
+modules to be imported; several CTFTiny handouts include importable `.py` files.
 
-The pinned pins live in `ctf-tools.txt` (capability layer, installed system-wide
-in the Dockerfile — deliberately outside the uv project env). Reproducibility:
-base images remain digest-pinned and `uv.lock` frozen; the capability layer is
-version-pinned (not hash-pinned) and bumps deliberately. Image grows to
-~2 GB / build ~5–10 min — accepted for solving power.
+The default `ctf-agent:latest` image includes a CTF toolkit: binary-analysis
+utilities (`objdump`, `strings`, `nm`, `readelf`, `hexdump`, `xxd`, `file`,
+`unzip`, `bzip2`, and `xz`), plus `gdb`, `binwalk`, `exiftool`, `steghide`,
+`outguess`, `john`, `openssl`, `socat`/`nc`, and `poppler-utils`. It also
+includes a pinned Python capability layer: NumPy, CPU-only PyTorch,
+PyCryptodome, SymPy, Z3, gmpy2, and pwntools. The system prompt lists these
+tools so the agent does not need to probe for them. The goal is to evaluate
+reasoning rather than work around missing dependencies—a confound that caused
+one real run, `msc-ezmaze`, to spend its budget decoding PyTorch’s pickle format
+by hand.
 
-The deterministic **pre-flight** (`tools/provision.py`) still runs and stays honest:
-it derives each run's real requirements from exactly what the agent can see — the
-staged handout files — through a small whitelist (`.pt` → torch; handout imports of
-`Crypto`/`numpy`/`sympy`/`z3`/`gmpy2`/`pwn` → their packages). With the kit baked in
-it normally reports `present` in one cheap jailed probe; it still provisions on
-hosts/older images that lack a package. Probe-before-install runs through the jail
-(the same interpreter and environment `run_python` gets), and installation happens
-at harness level (which does have a network; the jailed agent does not). Statuses
-(`present` / `installed` / `unavailable <reason>`) are logged to the trace and shown
-in the GUI. Workspace text can never name an arbitrary package — only whitelisted
-signatures trigger installs, and failures are recorded, never fatal.
-`CTF_PROVISION=off` disables the pre-flight entirely (ablations).
+The capability-layer pins are in `ctf-tools.txt`. They are installed
+system-wide in the Docker image, outside the uv project environment. Base
+images are digest-pinned and `uv.lock` is frozen. Capability-layer packages are
+version-pinned, but not hash-pinned, and are updated deliberately. The image is
+about 2 GB and takes roughly 5–10 minutes to build; this is accepted in
+exchange for the included solving tools.
 
-Required in `.env`: `LITELLM_BASE_URL`, `LITELLM_TOKEN` (any OpenAI-compatible
-provider — Duke AI Gateway with Duke VPN, or e.g. Ollama Cloud at
-`https://ollama.com`), `CTF_MODEL`, `CTF_DATASET_JSON` (CTFTiny index), and
-optionally LangSmith keys for cloud tracing. Challenge data lives in
-`./benchmark/` (git-ignored; clone/download separately).
+The deterministic pre-flight in `tools/provision.py` remains enabled by default.
+It derives requirements from the staged handout files—the same files the agent
+can see—using a small whitelist: `.pt` files trigger PyTorch, and handout
+imports of `Crypto`, `numpy`, `sympy`, `z3`, `gmpy2`, or `pwn` trigger their
+corresponding packages. With the bundled toolkit, the pre-flight usually reports
+`present` after one inexpensive jailed probe. On hosts or older images without a
+package, it can still provision it.
+
+The probe runs through the jail, using the same interpreter and environment as
+`run_python`. Installation happens at the harness level, which has network
+access; the jailed agent does not. Workspace text cannot request arbitrary
+packages: only whitelisted signatures trigger installation. Provisioning
+failures are recorded and are not fatal. Statuses (`present`, `installed`, or
+`unavailable <reason>`) appear in the trace and GUI. Set `CTF_PROVISION=off` to
+disable pre-flight provisioning for ablations.
+
+### Configuration
+
+Required `.env` values:
+
+- `LITELLM_BASE_URL`
+- `LITELLM_TOKEN`
+- `CTF_MODEL`
+- `CTF_DATASET_JSON` — path to the CTFTiny index
+
+LangSmith keys are optional. Any OpenAI-compatible provider can be used, such
+as the Duke AI Gateway (with Duke VPN) or Ollama Cloud at `https://ollama.com`.
 
 ## Usage
 
-Scored single challenge (writes to `results/<dir>/attempts.jsonl`):
+Run one scored challenge. Results are written to
+`results/<dir>/attempts.jsonl`:
 
 ```bash
-uv run ctf-agent <challenge_id>            # reported attempt
-uv run ctf-agent rev-checker --dev         # dev run, not reported
+uv run ctf-agent <challenge_id>
 ```
 
-Batch scored set (`configs/scored_set.json`):
+For a development run that is not reported:
+
+```bash
+uv run ctf-agent rev-checker --dev
+```
+
+Run the scored set in batch mode:
 
 ```bash
 uv run python -m ctf_agent.batch
 ```
 
-Web GUI (select challenges, watch live tool calls, view reports, change model /
-API key / limits at runtime):
+Start the web UI at <http://127.0.0.1:5000>:
 
 ```bash
-uv run ctf-flask-gui                       # http://127.0.0.1:5000
+uv run ctf-flask-gui
 ```
 
-The **Config** tab updates the model ID (dropdown from the gateway catalog when
-reachable, text box otherwise), API key, gateway URL, and all run limits — including
-**retries per challenge** (see the evaluator loop below), **flags-in-run cap**
-(`CTF_MAX_SUBMITS`, default 3) and an **on/off switch for retry handoff notes** — for
-the current session (optionally persisted to `.env`); “Test connection” verifies the
-gateway without spending tokens.
+The GUI’s Config tab lets you change the model ID, API key, gateway URL, and run
+limits for the current session. The model ID is selected from the gateway
+catalog when available, or entered manually. Settings can optionally be
+persisted to `.env`. The tab also includes a connection test that does not spend
+tokens.
+
+Run limits include retries per challenge, the flags-in-run cap
+(`CTF_MAX_SUBMITS`, default `3`), and an on/off switch for retry handoff notes.
 
 ### Evaluator loop
 
-The agent loop ships two deterministic evaluator mechanisms (no extra model calls,
-zero tokens):
+The agent uses two deterministic evaluator mechanisms. They require no
+additional model calls and consume no tokens:
 
-- **In-run feedback.** A rejected flag returns `INCORRECT (k of N)` with the rejected
-  candidate echoed back, so the model can correct course within the run. Submissions
-  are capped (`CTF_MAX_SUBMITS`, default 3); busting the cap ends the run as `no_flag`
-  instead of letting it guess forever. Escalations key on the **binding** budget
-  dimension — steps or tokens, whichever dies first: a halfway consolidation checkpoint
-  fires once at 50 % of that binding budget, and an urgent near-limit warning fires at
-  85 % of the token cap telling the agent to submit its best candidate now.
-- **Between-attempt handoff (GUI retry chains only).** When a retry runs after a model
-  failure, a deterministic note is distilled from the failed attempt’s trace — outcome,
-  step/tool mix, repeated and errored tool calls, every rejected flag (“do not
-  resubmit”) and where it left off — and injected before the next attempt’s first turn.
-  It never contains the flag and costs no tokens to produce; disable with
-  `CTF_FEEDBACK_NOTE=off`. Batch/scored runs deliberately do **not** use handoff notes:
-  their retries stay clean-slate so pass@k measurements stay honest. (If you enable
-  notes for scored runs, label the results as a different ablation.)
+- **In-run feedback:** A rejected flag returns `INCORRECT (k of N)` and echoes
+  the rejected candidate so the model can correct course within the run.
+  Submissions are capped by `CTF_MAX_SUBMITS` (default `3`). Exceeding the cap
+  ends the run as `no_flag` rather than allowing unlimited guesses.
+- **Budget-aware escalation:** Escalations are based on the binding budget—the
+  step or token limit that will run out first. A consolidation checkpoint fires
+  once at 50% of that budget. An urgent warning fires at 85% of the token cap
+  and tells the agent to submit its best candidate.
 
-Every trace's first line (`meta`) also records the exact caps the run ran under — if a
-run card shows `100 steps · 300000 tokens`, that run really did use those limits: check
-the Config tab (or `.env`, which it persists to) before comparing runs.
+For GUI retry chains only, a retry after a model failure can receive a
+deterministic handoff note distilled from the failed attempt’s trace. The note
+summarizes the outcome, step and tool mix, repeated or errored tool calls, every
+rejected flag (“do not resubmit”), and where the attempt stopped. It never
+contains the flag and costs no tokens to produce. Disable it with
+`CTF_FEEDBACK_NOTE=off`.
 
-Metrics from run artifacts:
+Batch and other scored runs deliberately do not use handoff notes, so retries
+remain clean-slate and pass@k measurements stay honest. If notes are enabled for
+scored runs, label those results as a separate ablation.
+
+Each trace’s first `meta` line records the exact limits used. If a run card shows
+`100 steps · 300000 tokens`, those were the limits for that run. Check the Config
+tab or `.env` before comparing runs.
+
+Aggregate metrics from run artifacts:
 
 ```bash
 uv run python -m ctf_agent.aggregate results/scored/attempts.jsonl
 ```
 
+## Fixed limits for reported runs
+
+Reported attempts use these limits:
+
+- 30 steps
+- 15 minutes
+- 150,000 total tokens
+- 4,000 characters of tool output
+- 60-second tool timeout
+- 1,024 maximum output tokens
+
+The first scored batch used `gpt-5.4-mini` through the Duke AI Gateway. Later
+bulk sessions used `gpt-oss:120b` through Ollama Cloud after the gateway quota
+was exhausted. Each attempt records its model, and each batch snapshot captures
+the configuration it used in `configs/scored_set.json` and the adjacent
+`config.json`.
+
 ## Containers
 
-The project ships as a reproducible container (rebuild it anywhere and get the
-same software — base images are pinned by digest, and `uv sync --frozen`
-installs exactly the versions in `uv.lock`):
+The project ships as a reproducible container. Base images are pinned by digest,
+and `uv sync --frozen` installs the versions recorded in `uv.lock`.
+
+Build the test image and run the pytest gate (no network or tokens required):
 
 ```bash
-docker build --target test -t ctf-agent:test .   # build + run the pytest gate (no network, no tokens)
-docker build -t ctf-agent:latest .               # runtime image (GUI + CLI + server)
-docker compose up --build                        # GUI on http://localhost:5000
+docker build --target test -t ctf-agent:test .
+```
+
+Build the runtime image:
+
+```bash
+docker build -t ctf-agent:latest .
+```
+
+Start the GUI with Docker Compose:
+
+```bash
+docker compose up --build
+# Open http://localhost:5000
 docker compose down
 ```
 
-The image deliberately excludes three machine-local things — `.env` (secrets),
-`benchmark/` (course dataset), and `runs/`+`results/` (your data) — which
-`compose.yaml` mounts read-only or shared at runtime:
+The image excludes machine-local data: `.env` (secrets), `benchmark/` (course
+dataset), and `runs/` and `results/` (your data). Docker Compose mounts them at
+runtime:
 
-| Host | Container | Mounted as |
+| Host | Container | Mount |
 |---|---|---|
-| `./.env` | `/app/.env` | read-only (secrets injected at runtime) |
-| `./benchmark` | `/data/benchmark` | read-only |
-| `./runs`, `./results` | `/data/runs`, `/data/results` | shared — container runs appear in host reports |
+| `./.env` | `/app/.env` | Read-only |
+| `./benchmark` | `/data/benchmark` | Read-only |
+| `./runs` | `/data/runs` | Shared |
+| `./results` | `/data/results` | Shared |
 
-CLI inside the container (secrets from `.env`, container paths forced with
-`-e`, which overrides `--env-file`):
+Run the CLI in the container with secrets from `.env` and container paths
+explicitly set with `-e`, which overrides `--env-file`:
 
 ```bash
 docker run --rm --security-opt seccomp=unconfined --env-file .env \
@@ -170,58 +230,52 @@ docker run --rm --security-opt seccomp=unconfined --env-file .env \
   ctf-agent:latest ctf-agent rev-checker --dev
 ```
 
-**Why `seccomp=unconfined`?** Docker's default seccomp profile blocks the
-user-namespace creation bubblewrap needs (`bwrap: No permissions to create new
-namespace`). Dropping the *outer* filter does not weaken the agent jail: what
-confines the agent is bwrap itself — no network, isolated pid/mount spaces,
-and a filesystem limited to workspace + read-only system dirs — while the
-container keeps cgroups and capability separation. The sandbox's own tests run
-inside this configuration in the `--target test` gate.
+Docker’s default seccomp profile blocks the user-namespace creation that
+bubblewrap needs, resulting in `bwrap: No permissions to create new namespace`.
+The command therefore uses `seccomp=unconfined` to remove the outer filter.
+The agent’s jail is still provided by bubblewrap: it has no network, isolated
+PID and mount namespaces, and access only to the workspace and read-only system
+directories. The container retains cgroups and capability separation. The
+sandbox tests run under this configuration in the `--target test` gate.
 
-Moving machines offline (no registry): `docker save ctf-agent:latest | gzip >
-ctf-agent.tar.gz`, copy the file and `docker load < ctf-agent.tar.gz` on the
-target machine; with a registry, `docker tag`/`push` the same image. In both
-cases bring the same `.env` + `benchmark/` data (never in the image) and runs
-continue with identical results directories.
+To move the image to an offline machine:
 
-## Fixed run limits (used for all reported attempts)
+```bash
+docker save ctf-agent:latest | gzip > ctf-agent.tar.gz
+# On the target machine:
+docker load < ctf-agent.tar.gz
+```
 
-30 steps · 15 min · 150 000 total-token cap · 4 000 tool-output chars ·
-60 s tool timeout · 1 024 max output tokens. The first scored batch ran on
-`gpt-5.4-mini` (Duke AI Gateway); bulk sessions later ran on `gpt-oss:120b`
-(Ollama Cloud) after the gateway quota was exhausted — attempts record their model,
-and every batch snapshot captures whatever config it used
-(`configs/scored_set.json` + `config.json` written alongside the results).
+Alternatively, tag and push the image to a registry. In either case, bring the
+same `.env` and `benchmark/` data separately; neither is included in the image.
+Runs continue in the same results directories.
 
 ## Testing
 
 ```bash
-uv run python -m pytest tests/    # 19 tests: sandbox/workspace, gateway mock,
-                                  # loop scaffolding (nudge/elide/budget), Flask GUI
+uv run python -m pytest tests/
 uv run python -m ruff check .
 ```
 
-Model-call tests use scripted fakes; nothing in the suite spends gateway tokens.
+The pytest suite covers sandbox and workspace behavior, a mocked gateway, agent
+loop scaffolding (nudges, context elision, and budgets), and the Flask GUI.
+Model-call tests use scripted fakes and do not spend gateway tokens.
 
 ## Repository layout
 
-```
-src/ctf_agent/       runner, agent loop, llm gateway client, batch, metrics,
-                     aggregate, cli, flask GUI + templates, legacy TUI
-src/ctf_agent/tools/ workspace (confined file ops) and sandbox (subprocess jail)
-configs/             scored_set.json (challenges x trials + limits)
-docs/                architecture diagrams mapped to Anthropic's agent guidance
-tests/               pytest suites (sandbox, loop, GUI; fakes, no live calls)
-results/             attempts.jsonl per experiment set + notes (artifacts local)
-runs/                per-run artifacts (git-ignored)
+```text
+src/ctf_agent/       Runner, agent loop, LLM gateway client, batch, metrics,
+                     aggregation, CLI, Flask GUI and templates, legacy TUI
+configs/             Scored set (challenges, trials, and limits)
+docs/                Architecture diagrams mapped to Anthropic’s agent guidance
+tests/               Pytest suites with fakes and no live model calls
+results/             Experiment attempts and notes (local artifacts)
+runs/                Per-run artifacts (git-ignored)
 ```
 
-## Credits & licenses
+## Credits and licenses
 
-- Benchmark data & challenge loader: [CTFTiny / NYU CTF Bench](https://github.com/NYU-LLM-CTF/NYU-CTF-Bench)
-  (GPL-2.0, AAAI'26 paper above) via the `nyuctf` package.
+- Benchmark data and challenge loader: [CTFTiny / NYU CTF Bench](https://github.com/NYU-LLM-CTF/NYU-CTF-Bench), licensed under GPL-2.0 and associated with the AAAI ’26 paper, accessed through the `nyuctf` package.
 - LLM calls: Duke AI Gateway (LiteLLM) through `langchain-openai`; tracing via LangSmith.
-- Flask, Textual, LangChain are used unmodified as dependencies.
-- All agent logic, tool sandboxing, metrics, and reporting are original to this
-  repository — see [`REPORT.md`](REPORT.md) §7 for the full reused-code and
-  AI-assistance disclosure required by course policy.
+- Flask, Textual, and LangChain are used as unmodified dependencies.
+- Agent logic, sandboxing, metrics, and reporting are original to this repository. See [`REPORT.md`](REPORT.md) §7 for the course-required disclosure of reused code and AI assistance.
