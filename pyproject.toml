@@ -6,7 +6,9 @@ requires-python = ">=3.12"
 dependencies = []
 
 [project.optional-dependencies]
-bench = ["nyuctf"]
+bench = [
+    "nyuctf",
+]
 
 [project.scripts]
 ctf-agent = "ctf_agent.cli:main"

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import urllib.request
 from dataclasses import dataclass, field
 from typing import Any
@@ -19,6 +20,25 @@ class ChatResult:
     input_tokens: int | None
     output_tokens: int | None
     raw: dict[str, Any] = field(repr=False, default_factory=dict)
+
+
+MAX_RETRIES = 3
+
+
+def _post_with_backoff(req: urllib.request.Request, timeout: float) -> dict[str, Any]:
+    """Sequential retries only, honoring Retry-After on 429/5xx."""
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            retriable = e.code == 429 or 500 <= e.code < 600
+            if not retriable or attempt == MAX_RETRIES:
+                # Do not include response bodies that may echo request content.
+                raise GatewayError(f"HTTP {e.code} from gateway") from None
+            wait = float(e.headers.get("Retry-After") or 2 ** (attempt + 2))
+            time.sleep(min(wait, 120))
+    raise GatewayError("unreachable")
 
 
 def chat(
@@ -51,12 +71,7 @@ def chat(
         },
         method="POST",
     )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        # Do not include response bodies that may echo request content.
-        raise GatewayError(f"HTTP {e.code} from gateway") from None
+    data = _post_with_backoff(req, timeout)
 
     usage = data.get("usage") or {}
     return ChatResult(
