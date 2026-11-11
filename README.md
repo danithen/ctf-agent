@@ -51,11 +51,16 @@ Batch scored set (`configs/scored_set.json`):
 uv run python -m ctf_agent.batch
 ```
 
-Web GUI (select challenges, watch live tool calls, view reports):
+Web GUI (select challenges, watch live tool calls, view reports, change model /
+API key / limits at runtime):
 
 ```bash
 uv run ctf-flask-gui                       # http://127.0.0.1:5000
 ```
+
+The **Config** tab updates the model ID, API key, gateway URL, and all run limits
+for the current session (optionally persisted to `.env`); “Test connection” verifies
+the gateway without spending tokens.
 
 Metrics from run artifacts:
 

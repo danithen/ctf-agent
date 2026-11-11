@@ -20,6 +20,8 @@ import os
 import queue
 import threading
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -35,7 +37,7 @@ from flask import (
 )
 
 from ctf_agent.agent import Limits, run_agent
-from ctf_agent.config import load_env
+from ctf_agent.config import load_env, update_env
 from ctf_agent.metrics import estimate_cost, load_attempts, summarize_attempts
 from ctf_agent.runner import load_target, new_run_id, stage_workspace
 
@@ -47,6 +49,7 @@ load_env()
 # ---------------------------------------------------------------------------
 CONFIG = Path("configs/scored_set.json")
 BENCH_DATA = Path("benchmark/ctftiny.json")
+DOTENV_PATH = Path(".env")
 RESULTS_ROOT = Path(os.environ.get("CTF_TUI_RESULTS", "results/tui"))
 RUNS_ROOT = Path(os.environ.get("CTF_RUNS_DIR", "runs")) / "tui"
 
@@ -82,16 +85,158 @@ def bench_info(cid: str) -> dict[str, Any]:
         return {}
 
 
+def _env_int(key: str, js_default: int | None) -> int | None:
+    """Env override wins over the scored-set config; blank/garbage = default."""
+    raw = (os.environ.get(key) or "").strip()
+    try:
+        return int(raw) if raw else js_default
+    except ValueError:
+        return js_default
+
+
 def make_limits() -> Limits:
-    cfg = json.loads(CONFIG.read_text())["limits"]
+    """Run limits: /config tab overrides (os.environ) beat scored_set.json."""
+    try:
+        cfg = json.loads(CONFIG.read_text())["limits"]
+    except Exception:  # noqa: BLE001  (config file missing/malformed)
+        cfg = {}
+    total_raw = (os.environ.get("CTF_MAX_TOTAL_TOKENS") or "").strip().lower()
+    if total_raw in {"0", "none"}:
+        max_total: int | None = None           # explicit “unlimited”
+    elif total_raw.isdigit():
+        max_total = int(total_raw)
+    else:
+        max_total = cfg.get("max_total_tokens")
     return Limits(
-        max_steps=cfg["max_steps"],
-        max_seconds=cfg["max_minutes"] * 60,
-        tool_output_chars=cfg["tool_output_chars"],
-        tool_timeout_s=cfg["tool_timeout_s"],
-        max_output_tokens=cfg["max_output_tokens"],
-        max_total_tokens=cfg.get("max_total_tokens"),
+        max_steps=_env_int("CTF_MAX_STEPS", None) or cfg.get("max_steps"),
+        max_seconds=(_env_int("CTF_MAX_MINUTES", None) or cfg.get("max_minutes", 15)) * 60,
+        tool_output_chars=_env_int("CTF_TOOL_OUTPUT_CHARS", None) or cfg.get("tool_output_chars"),
+        tool_timeout_s=_env_int("CTF_TOOL_TIMEOUT_S", None) or cfg.get("tool_timeout_s"),
+        max_output_tokens=_env_int("CTF_MAX_OUTPUT_TOKENS", None) or cfg.get("max_output_tokens"),
+        max_total_tokens=max_total,
     )
+
+
+# ---------------------------------------------------------------------------
+#  Configuration Tab
+# ---------------------------------------------------------------------------
+_CFG_STR_FIELDS = (
+    ("LITELLM_BASE_URL", "base_url"),
+    ("CTF_MODEL", "model"),
+)
+_CFG_INT_FIELDS = (
+    ("CTF_MAX_STEPS", "max_steps"),
+    ("CTF_MAX_MINUTES", "max_minutes"),
+    ("CTF_MAX_OUTPUT_TOKENS", "max_output_tokens"),
+    ("CTF_TOOL_OUTPUT_CHARS", "tool_output_chars"),
+    ("CTF_TOOL_TIMEOUT_S", "tool_timeout_s"),
+)
+
+
+def _mask_key(key: str | None) -> str:
+    if not key:
+        return "(not set)"
+    return f"…{key[-4:]}" if len(key) > 8 else "(set, very short)"
+
+
+def _probe_gateway(base: str | None, token: str | None) -> tuple[bool, str]:
+    """GET {base}/v1/models — verifies URL+key without spending model tokens."""
+    if not base or not token:
+        return False, "Base URL or API key not set."
+    url = base.rstrip("/") + "/v1/models"
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        ids = [m.get("id", "") for m in data.get("data", [])]
+        model = os.environ.get("CTF_MODEL", "")
+        listed = model in ids if model else None
+        note = f"{len(ids)} models listed"
+        if listed is False:
+            note += f" — note: current model '{model}' not in the list"
+        return True, note
+    except urllib.error.HTTPError as e:
+        return False, f"HTTP {e.code} from {url} — check the API key."
+    except Exception as e:  # noqa: BLE001
+        return False, f"Cannot reach {url}: {type(e).__name__}."
+
+
+@app.route("/config", methods=["GET", "POST"])
+def config():
+    saved = None
+    if request.method == "POST":
+        updates: dict[str, str] = {}
+        for env_key, field in _CFG_STR_FIELDS:
+            val = (request.form.get(field) or "").strip()
+            if val:
+                updates[env_key] = val
+        ints = {}
+        for env_key, field in _CFG_INT_FIELDS:
+            raw = (request.form.get(field) or "").strip()
+            if not raw:
+                continue
+            try:
+                n = int(raw)
+            except ValueError:
+                flash(f"'{field}' must be an integer (got {raw!r}).", "error")
+                return redirect(url_for("config"))
+            if n <= 0:
+                flash(f"'{field}' must be positive.", "error")
+                return redirect(url_for("config"))
+            ints[env_key] = str(n)
+        total_raw = (request.form.get("max_total_tokens") or "").strip()
+        total: str | None = None
+        if total_raw and total_raw.lower() not in {"0", "none"}:
+            try:
+                total = str(int(total_raw))
+            except ValueError:
+                flash("'token_budget' must be blank, an integer, 0, or 'none'.", "error")
+                return redirect(url_for("config"))
+        api_key = (request.form.get("api_key") or "").strip()
+        if api_key:
+            updates["LITELLM_TOKEN"] = api_key
+        # Apply to this process first (validation already passed)…
+        updates.update(ints)
+        if total is not None:
+            updates["CTF_MAX_TOTAL_TOKENS"] = total
+        os.environ.update(updates)
+        if total is None and total_raw:
+            os.environ["CTF_MAX_TOTAL_TOKENS"] = total_raw.lower()  # "none"
+        # …optionally persist for future sessions.
+        if request.form.get("remember"):
+            persist = dict(updates)
+            if total_raw.lower() in {"0", "none"}:
+                persist["CTF_MAX_TOTAL_TOKENS"] = "0"
+            update_env(persist, DOTENV_PATH)
+        saved = [k for k in updates if k != "LITELLM_TOKEN"]
+        if api_key:
+            saved.append("LITELLM_TOKEN")
+        flash("Applied to the current session: " + (", ".join(saved) or "nothing new"), "ok")
+        return redirect(url_for("config"))
+    return render_template(
+        "config.html",
+        active_tab="config",
+        base_url=os.environ.get("LITELLM_BASE_URL", ""),
+        model=os.environ.get("CTF_MODEL", ""),
+        key_mask=_mask_key(os.environ.get("LITELLM_TOKEN")),
+        limits={
+            "max_steps": os.environ.get("CTF_MAX_STEPS", ""),
+            "max_minutes": os.environ.get("CTF_MAX_MINUTES", ""),
+            "max_output_tokens": os.environ.get("CTF_MAX_OUTPUT_TOKENS", ""),
+            "tool_output_chars": os.environ.get("CTF_TOOL_OUTPUT_CHARS", ""),
+            "tool_timeout_s": os.environ.get("CTF_TOOL_TIMEOUT_S", ""),
+            "max_total_tokens": os.environ.get("CTF_MAX_TOTAL_TOKENS", ""),
+        },
+    )
+
+
+@app.route("/config/test", methods=["POST"])
+def config_test():
+    ok, note = _probe_gateway(os.environ.get("LITELLM_BASE_URL"),
+                              os.environ.get("LITELLM_TOKEN"))
+    flash(("Gateway reachable — " if ok else "Gateway test failed: ") + note,
+          "ok" if ok else "error")
+    return redirect(url_for("config"))
 
 
 # ---------------------------------------------------------------------------

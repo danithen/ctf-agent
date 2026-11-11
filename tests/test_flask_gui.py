@@ -1,14 +1,19 @@
-"""Tests for the Flask GUI (selection / runtime / report tabs)."""
+"""Tests for the Flask GUI (selection / runtime / report / config tabs)."""
 
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
 
 from ctf_agent import flask_gui
 from ctf_agent.flask_gui import app
+
+ENV_KEYS = ["LITELLM_TOKEN", "LITELLM_BASE_URL", "CTF_MODEL", "CTF_MAX_STEPS",
+            "CTF_MAX_MINUTES", "CTF_MAX_OUTPUT_TOKENS", "CTF_TOOL_OUTPUT_CHARS",
+            "CTF_TOOL_TIMEOUT_S", "CTF_MAX_TOTAL_TOKENS"]
 
 
 class DummyResult:
@@ -32,6 +37,7 @@ def env(monkeypatch, tmp_path: Path):
     results = tmp_path / "results"
     monkeypatch.setattr(flask_gui, "RUNS_ROOT", runs)
     monkeypatch.setattr(flask_gui, "RESULTS_ROOT", results)
+    monkeypatch.setattr(flask_gui, "DOTENV_PATH", tmp_path / ".env")
     flask_gui.SESSION_ATTEMPTS.clear()          # fresh app session per test
     monkeypatch.setattr(flask_gui, "new_run_id", lambda cid: f"{cid}-test")
     monkeypatch.setattr(flask_gui, "run_agent", lambda *a, **k: DummyResult())
@@ -142,3 +148,73 @@ def test_report_run_detail(env):
     resp = client.get("/report/demo-test-t1")
     assert resp.status_code == 200
     assert "list_files" in resp.get_data(as_text=True)
+
+
+@pytest.fixture
+def env_guard(monkeypatch):
+    """Snapshot os.environ keys the /config tab mutates; restore after test."""
+    before = {k: os.environ.get(k) for k in ENV_KEYS}
+    yield
+    for k, v in before.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+
+
+def test_config_get_masks_api_key(env, env_guard, monkeypatch):
+    monkeypatch.setenv("LITELLM_TOKEN", "sk-supersecret-abc99")
+    html = app.test_client().get("/config").get_data(as_text=True)
+    assert "…bc99" in html                        # only the last 4 chars are shown
+    assert "sk-supersecret-abc99" not in html
+
+
+def test_config_post_applies_runtime_overrides(env, env_guard):
+    client = app.test_client()
+    resp = client.post("/config", data={
+        "model": "test-model-9", "max_steps": "12", "max_minutes": "9",
+        "max_output_tokens": "256", "tool_output_chars": "500",
+        "tool_timeout_s": "45", "max_total_tokens": "40000",
+    })
+    assert resp.status_code == 302
+    assert os.environ["CTF_MODEL"] == "test-model-9"
+    assert os.environ["CTF_MAX_STEPS"] == "12"
+    assert os.environ["CTF_MAX_TOTAL_TOKENS"] == "40000"
+    lim = flask_gui.make_limits()
+    assert (lim.max_steps, lim.max_output_tokens, lim.max_total_tokens) == (12, 256, 40000)
+    assert lim.max_seconds == 9 * 60
+    assert not flask_gui.DOTENV_PATH.exists()     # not persisted without “remember”
+
+
+def test_config_post_persists_with_remember(env, env_guard, tmp_path: Path):
+    env_file = flask_gui.DOTENV_PATH
+    env_file.parent.mkdir(parents=True, exist_ok=True)
+    env_file.write_text("# keep this comment\nCTF_MODEL=old-model\n")
+    client = app.test_client()
+    client.post("/config", data={
+        "model": "new-model", "api_key": "sk-fresh", "max_total_tokens": "none",
+        "remember": "1",
+    })
+    text = env_file.read_text()
+    assert "# keep this comment" in text
+    assert "CTF_MODEL=new-model" in text and "old-model" not in text
+    assert "LITELLM_TOKEN=sk-fresh" in text
+    assert "CTF_MAX_TOTAL_TOKENS=0" in text       # “none” persists as 0
+    assert os.environ["CTF_MAX_TOTAL_TOKENS"].lower() in {"0", "none"}
+    assert flask_gui.make_limits().max_total_tokens is None
+
+
+def test_config_post_rejects_bad_int(env, env_guard, monkeypatch):
+    monkeypatch.setenv("LITELLM_TOKEN", "sk-keepme")
+    before_steps = os.environ.get("CTF_MAX_STEPS")   # may come from the real .env
+    resp = app.test_client().post("/config", data={"max_steps": "abc",
+                                                   "api_key": "sk-change"})
+    assert resp.status_code == 302
+    assert os.environ.get("LITELLM_TOKEN") == "sk-keepme"   # all-or-nothing apply
+    assert os.environ.get("CTF_MAX_STEPS") == before_steps  # nothing applied
+
+
+def test_config_test_connection(env, env_guard, monkeypatch):
+    monkeypatch.setattr(flask_gui, "_probe_gateway", lambda b, t: (True, "23 models listed"))
+    html = app.test_client().post("/config/test", follow_redirects=True).get_data(as_text=True)
+    assert "Gateway reachable" in html and "23 models listed" in html

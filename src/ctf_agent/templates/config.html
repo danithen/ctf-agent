@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}Config — CTF Agent{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Configuration</h1>
+  <p>Runtime overrides — applied to every <strong>new</strong> run this session, no restart needed.
+     Values left blank fall back to the previous source (<span class="mono">scoring config</span> or <span class="mono">.env</span>).</p>
+</div>
+
+<div class="card" style="max-width:720px;">
+  <form method="post" action="{{ url_for('config') }}" style="display:grid; gap:14px;">
+    <div class="grid" style="grid-template-columns:1fr 1fr; gap:14px;">
+      <label style="display:grid; gap:4px;">
+        <span class="muted">Gateway base URL (no /v1)</span>
+        <input class="input mono" type="text" name="base_url" value="{{ base_url }}"
+               placeholder="https://ollama.com">
+      </label>
+      <label style="display:grid; gap:4px;">
+        <span class="muted">Model ID</span>
+        <input class="input mono" type="text" name="model" value="{{ model }}"
+               placeholder="gpt-oss:120b">
+      </label>
+    </div>
+
+    <label style="display:grid; gap:4px;">
+      <span class="muted">API key — type to replace; current: <span class="mono">{{ key_mask }}</span></span>
+      <input class="input mono" type="password" name="api_key" autocomplete="off"
+             placeholder="sk-…  (leave blank to keep current)">
+    </label>
+
+    <fieldset style="border:1px solid var(--border,#333); border-radius:8px; padding:12px 14px;">
+      <legend class="muted" style="padding:0 6px; font-size:0.85em;">Run limits</legend>
+      <div class="grid" style="grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px;">
+        <label style="display:grid; gap:4px;">
+          <span class="muted">Step limit</span>
+          <input class="input" type="text" inputmode="numeric" name="max_steps"
+                 value="{{ limits.max_steps }}" placeholder="30">
+        </label>
+        <label style="display:grid; gap:4px;">
+          <span class="muted">Time limit (minutes)</span>
+          <input class="input" type="text" inputmode="numeric" name="max_minutes"
+                 value="{{ limits.max_minutes }}" placeholder="15">
+        </label>
+        <label style="display:grid; gap:4px;">
+          <span class="muted">Max output tokens/call</span>
+          <input class="input" type="text" inputmode="numeric" name="max_output_tokens"
+                 value="{{ limits.max_output_tokens }}" placeholder="1024">
+        </label>
+        <label style="display:grid; gap:4px;">
+          <span class="muted">Tool output chars</span>
+          <input class="input" type="text" inputmode="numeric" name="tool_output_chars"
+                 value="{{ limits.tool_output_chars }}" placeholder="4000">
+        </label>
+        <label style="display:grid; gap:4px;">
+          <span class="muted">Tool timeout (s)</span>
+          <input class="input" type="text" inputmode="numeric" name="tool_timeout_s"
+                 value="{{ limits.tool_timeout_s }}" placeholder="60">
+        </label>
+        <label style="display:grid; gap:4px;">
+          <span class="muted">Token budget <em>(blank = default · 0/none = unlimited)</em></span>
+          <input class="input" type="text" inputmode="numeric" name="max_total_tokens"
+                 value="{{ limits.max_total_tokens }}" placeholder="150000">
+        </label>
+      </div>
+    </fieldset>
+
+    <div style="display:flex; align-items:center; gap:18px; flex-wrap:wrap;">
+      <label style="display:flex; align-items:center; gap:6px;">
+        <input type="checkbox" name="remember" value="1">
+        <span class="muted">Persist to <span class="mono">.env</span> for future sessions</span>
+      </label>
+      <button class="btn" type="submit">Apply</button>
+      <button class="btn ghost" type="submit" formaction="{{ url_for('config_test') }}"
+              formmethod="post" style="margin-left:auto;">Test connection</button>
+    </div>
+    <p class="muted" style="margin:0; font-size:0.85em;">
+      “Test connection” lists models on the gateway without spending tokens — use it after
+      changing the key, URL, or model. The API key is never displayed; only its last 4 chars.
+    </p>
+  </form>
+</div>
+{% endblock %}

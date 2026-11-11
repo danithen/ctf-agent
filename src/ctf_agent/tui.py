@@ -18,9 +18,10 @@ from textual.binding import Binding
 from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.screen import Screen
 from textual.widgets import Footer, Header, Label, ListItem, ListView, Static
+
 try:
     from textual_plotext import PlotextPlot
-except Exception:  # pragma: no cover
+except Exception:  # noqa: BLE001  # pragma: no cover
     class PlotextPlot:
         def __init__(self):
             self.plt = None
@@ -373,7 +374,7 @@ class ReportScreen(Screen):
             pp.title("Pass@k (average across challenges)")
             container.mount(Static("Pass@k", classes="section"))
             container.mount(pass_plot)
-        except Exception:  # pragma: no cover
+        except Exception:  # noqa: BLE001  # pragma: no cover
             container.mount(Static("Pass@k data unavailable", classes="section"))
 
         # Average solve rate per challenge
@@ -389,7 +390,7 @@ class ReportScreen(Screen):
                 rp.title("Average solve rate per challenge (%)")
                 container.mount(Static("Average solve rate", classes="section"))
                 container.mount(rate_plot)
-            except Exception:  # pragma: no cover
+            except Exception:  # noqa: BLE001  # pragma: no cover
                 container.mount(Static("Rate plot unavailable", classes="section"))
 
         # Per-challenge table
