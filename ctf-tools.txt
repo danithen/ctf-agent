@@ -1,0 +1,10 @@
+# Capability layer for the agent's sandbox python — the jailed agent runs the
+# system python (see Dockerfile), NOT the uv project venv, so these must be
+# installed system-wide. Exact pins resolved 2026-11-11; bump deliberately.
+# (torch is installed separately in the Dockerfile from the CPU-wheel index.)
+pycryptodome==4.4.0
+z3-solver==5.4.1.0
+sympy==1.14.0
+gmpy2==2.3.2
+pwntools==4.15.0
+numpy==2.5.4

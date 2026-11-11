@@ -39,22 +39,30 @@ sudo apt install bubblewrap binutils unzip file bzip2 xz-utils xxd   # sandbox +
 
 Tool scripts run under the plain `python3` the sandbox resolves (`-E -s`, workspace
 as cwd, so handout sibling modules import — several CTFTiny handouts ship importable
-`.py` files). The environment is curated for the binary-analysis staples the traces
-proved the agent reaches for (objdump, strings, nm, hexdump/xxd, file, unzip and the
-compression tools) — these are installed by the Dockerfile; install the same list on
-the host so host and container behave identically. Pre-flight provisioning also
-needs an installer for the sandbox interpreter: `sudo apt install python3-pip`
-on a host (the container image ships pip); big wheels like torch may need a
-higher `CTF_PROVISION_TIMEOUT` on slow links.
+`.py` files).
 
-Deliberately **not** provided: no network for the agent (so no `pip` at run time),
-no default ML packages (`torch` etc. — too heavy to blanket-install), and no extra
-solver libraries beyond the standard library.
+The default image (`ctf-agent:latest`) carries the full CTF toolkit, baked in: the
+binary-analysis staples (objdump, strings, nm/readelf, hexdump/xxd, file, unzip,
+bzip2/xz) plus gdb, binwalk, exiftool, steghide, outguess, john, openssl,
+socat/nc, poppler-utils — and a pinned python capability layer (numpy, torch CPU,
+pycryptodome, sympy, z3-solver, gmpy2, pwntools). Rationale: the evaluation should
+measure the agent's reasoning, not its ability to hand-roll around a missing
+dependency — a confound that cost a real run (msc-ezmaze burned its budget
+decoding torch's pickle format by hand). The SYSTEM prompt lists the toolkit so
+the agent doesn't have to probe for it.
 
-Instead, a deterministic **pre-flight** (`tools/provision.py`) derives each run's real
-requirements from exactly what the agent can see — the staged handout files — through
-a small whitelist (`.pt` → torch; handout imports of `Crypto`/`numpy`/`sympy`/`z3`/
-`gmpy2`/`pwn` → their packages). Probe-before-install runs through the jail itself
+The pinned pins live in `ctf-tools.txt` (capability layer, installed system-wide
+in the Dockerfile — deliberately outside the uv project env). Reproducibility:
+base images remain digest-pinned and `uv.lock` frozen; the capability layer is
+version-pinned (not hash-pinned) and bumps deliberately. Image grows to
+~2 GB / build ~5–10 min — accepted for solving power.
+
+The deterministic **pre-flight** (`tools/provision.py`) still runs and stays honest:
+it derives each run's real requirements from exactly what the agent can see — the
+staged handout files — through a small whitelist (`.pt` → torch; handout imports of
+`Crypto`/`numpy`/`sympy`/`z3`/`gmpy2`/`pwn` → their packages). With the kit baked in
+it normally reports `present` in one cheap jailed probe; it still provisions on
+hosts/older images that lack a package. Probe-before-install runs through the jail
 (the same interpreter and environment `run_python` gets), and installation happens
 at harness level (which does have a network; the jailed agent does not). Statuses
 (`present` / `installed` / `unavailable <reason>`) are logged to the trace and shown

@@ -21,13 +21,28 @@ ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
 
 # bubblewrap is a hard requirement of the agent sandbox — no silent fallback,
 # so it ships in the image rather than being documented as a manual step.
-# binutils (objdump/strings) · unzip · file (type triage) · bzip2/xz-utils:
-# the binary-analysis staples the agent must be able to rely on — their
-# absence caused exit-127 dead-ends on real runs (see docs/architecture.md).
+# Beyond the OS the default image carries the CTF toolkit the agent can rely
+# on — the evaluation measures problem-solving, not the agent's ability to
+# hand-roll around a missing dependency (msc-ezmaze burned its real budget
+# hand-decoding torch's pickle format). bookworm ships no radare2 candidate;
+# gdb + objdump cover disassembly.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        bubblewrap ca-certificates binutils unzip file bzip2 xz-utils xxd bsdextrautils \
+        bubblewrap ca-certificates binutils unzip file bzip2 xz-utils xxd \
+        bsdextrautils gdb binwalk libimage-exiftool-perl steghide outguess \
+        john openssl netcat-openbsd socat poppler-utils \
     && rm -rf /var/lib/apt/lists/*
+
+# --- capability layer: python packages the sandbox python must have --------
+# Deliberately NOT part of the uv project env: the jailed agent runs the
+# system python (run_python resolves `python3` on the jail PATH), and layers
+# are ordered so tool bumps never rebuild the uv layer.
+# Pinned by version (not hash) — resolved 2026-11-11; bump deliberately.
+COPY ctf-tools.txt /tmp/ctf-tools.txt
+RUN pip install --no-cache-dir -r /tmp/ctf-tools.txt \
+    && pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu \
+        torch==2.15.0+cpu \
+    && rm /tmp/ctf-tools.txt
 
 COPY --from=ghcr.io/astral-sh/uv:0.13.1@sha256:4a1f3666816dafadd20ceb71eac9a7d56d7ef30279f7d64048519ab901ada336 /uv /usr/local/bin/uv
 
