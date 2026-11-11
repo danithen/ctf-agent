@@ -1,0 +1,19 @@
+{
+  "config_file": "configs/scored_set.json",
+  "benchmark_commit": "f1c9531672c45b24b7fb5f3aa44a7ac33d3602f8",
+  "agent_commit": "fe6d084e840f1b090eec4af1482917cd48aadf81",
+  "model": "gpt-5.4-mini",
+  "limits": {
+    "max_steps": 30,
+    "max_minutes": 15,
+    "tool_output_chars": 4000,
+    "tool_timeout_s": 60,
+    "max_output_tokens": 1024,
+    "max_total_tokens": 150000
+  },
+  "challenges": [
+    "rev-checker"
+  ],
+  "trials": 1,
+  "started": "2026-11-11T12:32:33-0600"
+}

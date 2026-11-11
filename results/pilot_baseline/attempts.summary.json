@@ -1,0 +1,27 @@
+{
+  "challenges": {
+    "rev-rap": {
+      "trials": 1,
+      "successes": 0,
+      "success_rate_pct": 0.0,
+      "sample_sd_pp": null,
+      "pass_at_k": {
+        "1": 0.0
+      },
+      "mean_input_tokens": 162230,
+      "mean_output_tokens": 1181,
+      "mean_total_tokens": 163411,
+      "mean_elapsed_s": 111.74,
+      "total_elapsed_s": 111.74,
+      "statuses": [
+        "token_budget"
+      ]
+    }
+  },
+  "overall": {
+    "challenges": 1,
+    "attempts": 1,
+    "successes": 0,
+    "average_solve_rate_pct": 0.0
+  }
+}

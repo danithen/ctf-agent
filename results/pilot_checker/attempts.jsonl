@@ -1,0 +1,1 @@
+{"run_id": "rev-checker-20261111T123233-t1", "challenge_id": "rev-checker", "trial": 1, "model": "gpt-5.4-mini", "verified": true, "status": "solved", "steps": 9, "input_tokens": 9916, "output_tokens": 1078, "elapsed_s": 42.06, "error": null, "trace_file": "results/pilot_checker/runs/rev-checker-20261111T123233-t1/trace.jsonl"}

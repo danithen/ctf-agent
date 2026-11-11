@@ -1,0 +1,1 @@
+{"run_id": "rev-rap-20261111T120221-t1", "challenge_id": "rev-rap", "trial": 1, "model": "gpt-5.4-mini", "verified": false, "status": "token_budget", "steps": 26, "input_tokens": 162230, "output_tokens": 1181, "elapsed_s": 111.74, "error": null, "trace_file": "results/pilot/runs/rev-rap-20261111T120221-t1/trace.jsonl"}

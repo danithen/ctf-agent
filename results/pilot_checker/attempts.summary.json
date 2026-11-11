@@ -1,0 +1,27 @@
+{
+  "challenges": {
+    "rev-checker": {
+      "trials": 1,
+      "successes": 1,
+      "success_rate_pct": 100.0,
+      "sample_sd_pp": null,
+      "pass_at_k": {
+        "1": 1.0
+      },
+      "mean_input_tokens": 9916,
+      "mean_output_tokens": 1078,
+      "mean_total_tokens": 10994,
+      "mean_elapsed_s": 42.06,
+      "total_elapsed_s": 42.06,
+      "statuses": [
+        "solved"
+      ]
+    }
+  },
+  "overall": {
+    "challenges": 1,
+    "attempts": 1,
+    "successes": 1,
+    "average_solve_rate_pct": 100.0
+  }
+}

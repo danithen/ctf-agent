@@ -8,7 +8,11 @@ benchmark/
 agent-workspace/
 runs/
 traces/
+results/*/runs/
+results/**/trace.jsonl
 .env
 .env.*
 !.env.example
 *.env.local
+# pi coding-agent session transcripts
+pi-session-*.html
