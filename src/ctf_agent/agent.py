@@ -19,14 +19,20 @@ TOOLS: list[dict[str, Any]] = [
         "name": "list_files", "description": "List files in the workspace.",
         "parameters": {"type": "object", "properties": {}, "additionalProperties": False}}},
     {"type": "function", "function": {
-        "name": "read_file", "description": "Read a text file in the workspace.",
-        "parameters": {"type": "object", "properties": {"path": {"type": "string"}},
+        "name": "read_file", "description": "Read a text file in the workspace. Supports offset for large files.",
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string"}, "offset": {"type": "integer", "description": "Byte offset to start reading from."}},
                        "required": ["path"], "additionalProperties": False}}},
     {"type": "function", "function": {
         "name": "run_python", "description": "Run a .py file in the workspace with python3 (isolated, time-limited). Optional stdin.",
         "parameters": {"type": "object", "properties": {
             "path": {"type": "string"}, "stdin": {"type": "string"}},
             "required": ["path"], "additionalProperties": False}}},
+    {"type": "function", "function": {
+        "name": "run_command", "description": "Run a shell command (e.g. objdump, strings, grep) in the workspace. Use pipes for filtering.",
+        "parameters": {"type": "object", "properties": {
+            "cmd": {"type": "string", "description": "The command to run (e.g. 'objdump -d binary | grep main')"}},
+            "required": ["cmd"], "additionalProperties": False}}},
     {"type": "function", "function": {
         "name": "write_file", "description": "Write a text file in the workspace (e.g. a helper script). Overwrites.",
         "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
@@ -38,19 +44,35 @@ TOOLS: list[dict[str, Any]] = [
 ]
 
 SYSTEM = (
-    "You are solving a CTF challenge. Your workspace holds the contestant files and "
-    "description.txt. Work method:\n"
-    "1. Read the source first. Identify what the program does, where the target value "
-    "comes from, and how it is transformed.\n"
-    "2. Do not guess inputs at random. If the output is an encoded value, reverse the "
-    "transformation in code (write_file a decode script and run_python it).\n"
-    "3. Never repeat a tool call with the same result. If an approach shows no progress "
-    "after two tries, change strategy.\n"
-    "4. For a binary (ELF), do not stop at size, entry point, or section headers. Disassemble "
-    "the main logic with objdump -d and find the comparison or loop that checks the input; "
-    "recover the expected value or transformation from that code.\n"
-    "5. Call submit_flag only with a value you derived from the evidence.\n"
-    "You have a limited number of steps; spend them on analysis."
+    "You are an expert CTF player working inside a sandboxed workspace. The challenge description "
+    "is included in the first message — do not re-read description.txt. Work in steps; each tool "
+    "turn counts against a strict limit.\n"
+    "\n"
+    "Toolkit facts (saves steps to know these):\n"
+    "- run_command: one /bin/sh command, cwd = workspace. Pipes | and filters work (grep, head, "
+    "strings, objdump -d, hexdump, python3 -c). Output is TRUNCATED AT THE TAIL when long — pipe "
+    "through 'head -c 3000' or grep to keep the useful part. Redirects (>, >>) and chaining "
+    "(; && ||) are blocked — pipe, or write a file instead.\n"
+    "- run_python: executes a .py file you must write_file into the workspace first (2 steps); "
+    "python3 is isolated; optional stdin. Print only the lines you need.\n"
+    "- read_file: supports offset; returns only a summary for binary files — analyze binaries via "
+    "run_command/run_python instead. write_file overwrites and allows max 20000 chars per call.\n"
+    "\n"
+    "Method:\n"
+    "1. Triage: list files, inspect the few most relevant ones. For binaries start with "
+    "'strings | grep -iE flag|key|secret' and 'objdump -d --no-show-raw-insn <file> | head -c 3000' "
+    "targeting main/validating logic.\n"
+    "2. Keep a running notes file (write_file notes.md) with findings, transformations, and "
+    "candidate flags — it survives when older tool outputs get elided from context.\n"
+    "3. Solve with targeted scripts: decode, transform, or brute-force small search spaces; re-verify "
+    "your derivation before submitting.\n"
+    "4. Use the flag format from the description. Submit plausible candidates as soon as they form — "
+    "a wrong guess costs one step, not the run.\n"
+    "5. Repeating an identical call is rejected (except when the output was elided — one exact repeat "
+    "is allowed to re-view it). If a method stalls, switch approach immediately.\n"
+    "\n"
+    "Respond with at least one tool call each turn (concise analysis prose is welcome), or "
+    "submit_flag when you have a candidate. Spend steps on analysis, not retries."
 )
 
 
@@ -64,6 +86,49 @@ class Limits:
     max_total_tokens: int | None = None
 
 
+# --- context management -----------------------------------------------------
+# Once cumulative input tokens cross half the total budget, stale tool outputs
+# (beyond the recent window) are replaced with stubs. The corresponding dedup
+# signature is added to ``replay_once`` so the model may repeat that call once
+# to view the output again. This keeps ~150k-token runs from drowning in
+# re-sent history (the 'token_budget' failure mode seen in early attempts).
+MAX_NUDGES = 2            # bare-text replies tolerated before no_flag
+ELIDE_KEEP_RECENT = 6     # most recent tool results kept verbatim
+ELIDE_MIN_CHARS = 200     # don't bother stubbing tiny outputs
+
+
+def _elide_old_tool_results(
+    messages: list[dict[str, Any]],
+    sig_by_id: dict[str, tuple[str, ...]],
+    replay_once: set[tuple[str, ...]],
+    stubbed_ids: set[str],
+    keep: int = ELIDE_KEEP_RECENT,
+) -> int:
+    """Stub out old tool outputs; return total characters freed."""
+    tool_idx = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
+    if len(tool_idx) <= keep:
+        return 0
+    freed = 0
+    for i in tool_idx[:-keep]:
+        m = messages[i]
+        call_id = m.get("tool_call_id")
+        content = m.get("content") or ""
+        already_stubbed = call_id in stubbed_ids
+        if len(content) < ELIDE_MIN_CHARS or already_stubbed or content.startswith("error:"):
+            continue
+        sig = sig_by_id.get(call_id)
+        if sig is not None:
+            replay_once.add(sig)
+        freed += len(content)
+        if call_id is not None:
+            stubbed_ids.add(call_id)
+        m["content"] = (
+            f"[{len(content)} chars elided to save context — repeat this exact "
+            "call to view the output again]"
+        )
+    return freed
+
+
 @dataclass
 class Result:
     verified: bool
@@ -72,6 +137,9 @@ class Result:
     input_tokens: int | None
     output_tokens: int | None
     elapsed_s: float
+    model_calls: int = 0
+    tool_calls: int = 0
+    estimated_cost_usd: float | None = None
     events: list[dict] = field(default_factory=list)
 
 
@@ -85,9 +153,11 @@ def _run_tool(ws: Workspace, name: str, args: dict[str, Any], max_chars: int) ->
     if name == "list_files":
         return ws.list_files()
     if name == "read_file":
-        return ws.read_file(args["path"], max_chars)
+        return ws.read_file(args["path"], max_chars, args.get("offset", 0))
     if name == "run_python":
         return ws.run_python(args["path"], args.get("stdin"))
+    if name == "run_command":
+        return ws.run_command(args["cmd"])
     if name == "write_file":
         return ws.write_file(args["path"], args["content"])
     raise ToolError(f"unknown tool {name}")
@@ -104,6 +174,8 @@ def run_agent(target: Target, workspace: Path, limits: Limits, trace_path: Path)
     in_tok: int | None = 0
     out_tok: int | None = 0
     events: list[dict] = []
+    model_calls = 0
+    tool_calls = 0
     trace_path.parent.mkdir(parents=True, exist_ok=True)
     fh = trace_path.open("w")
 
@@ -116,7 +188,11 @@ def run_agent(target: Target, workspace: Path, limits: Limits, trace_path: Path)
     status = "step_limit"
     verified = False
     steps = 0
-    seen_calls: set[tuple[str, str]] = set()
+    seen_calls: set[tuple[str, ...]] = set()
+    sig_by_id: dict[str, tuple[str, ...]] = {}
+    replay_once: set[tuple[str, ...]] = set()
+    stubbed_ids: set[str] = set()
+    nudges = 0
     try:
         for steps in range(1, limits.max_steps + 1):
             if time.monotonic() - t0 > limits.max_seconds:
@@ -127,31 +203,86 @@ def run_agent(target: Target, workspace: Path, limits: Limits, trace_path: Path)
                     and in_tok + out_tok >= limits.max_total_tokens):
                 status = "token_budget"
                 break
+            # Budget-aware coaching right before the model call.
+            if steps == limits.max_steps:
+                messages.append({"role": "user", "content": (
+                    "This is your FINAL step. Call submit_flag now with your best candidate "
+                    "flag based on the evidence you have gathered.")})
+            elif limits.max_steps - steps <= 3:
+                used = (in_tok or 0) + (out_tok or 0)
+                messages.append({"role": "user", "content": (
+                    f"Status: step {steps}/{limits.max_steps}, ~{used} tokens used"
+                    + (f" of {limits.max_total_tokens}" if limits.max_total_tokens else "")
+                    + ". Prioritize reaching a submit_flag attempt with your best candidate.")})
+            model_calls += 1
             r = chat(messages, TOOLS, max_tokens=limits.max_output_tokens)
             in_tok = _sum(in_tok, r.input_tokens)
             out_tok = _sum(out_tok, r.output_tokens)
             msg = r.message
             messages.append(msg)
-            log("model", content=msg.get("content"), tool_calls=msg.get("tool_calls"),
+            log("model", content=msg.get("content"), reasoning=msg.get("reasoning"),
+                tool_calls=msg.get("tool_calls"),
                 input_tokens=r.input_tokens, output_tokens=r.output_tokens)
 
             calls = msg.get("tool_calls") or []
             if not calls:
+                # The model replied with prose only. Nudge it back to work instead of
+                # killing the run (models often think out loud before calling tools).
+                if nudges < MAX_NUDGES and steps < limits.max_steps:
+                    nudges += 1
+                    messages.append({"role": "user", "content": (
+                        "No tool call in your last reply. Either call a tool to continue "
+                        "investigating, or call submit_flag with your best candidate. "
+                        f"Step {steps}/{limits.max_steps}; "
+                        f"{limits.max_steps - steps} steps remain.")})
+                    log("nudge", n=nudges)
+                    continue
                 status = "no_flag"
                 break
 
             done = False
             for c in calls:
+                tool_calls += 1
                 name = c["function"]["name"]
+                sig: tuple[str, ...] | None = None
                 try:
                     args = json.loads(c["function"].get("arguments") or "{}")
-                    sig = (name, json.dumps(args, sort_keys=True))
+                    
+                    # Enhanced loop detection
+                    if name == "write_file":
+                        content = args.get("content", "")
+                        path = args.get("path", "")
+                        sig = (name, path, content)
+                        if sig in seen_calls:
+                            raise ToolError("you already wrote this exact content to this file; it will not change anything.")
+                    elif name == "run_python":
+                        path = args.get("path", "")
+                        try:
+                            # Resolve path to read current content for the signature
+                            p = (workspace / path).resolve()
+                            if p.is_file():
+                                content = p.read_text()
+                                sig = (name, path, content)
+                            else:
+                                sig = (name, path, None)
+                        except Exception:  # noqa: BLE001
+                            sig = (name, path, None)
+                        
+                        if sig in seen_calls:
+                            raise ToolError("you already ran this exact file content; the result will not change. Modify the script or try a different approach.")
+                    else:
+                        sig = (name, json.dumps(args, sort_keys=True))
+                    
                     if sig in seen_calls and name != "submit_flag":
-                        raise ToolError(
-                            "you already made this exact call and got the result above; "
-                            "it will not change. Change your approach: different file, "
-                            "different method, or submit your best candidate.")
+                        if sig in replay_once:
+                            replay_once.discard(sig)  # allow one repeat of elided output
+                        else:
+                            raise ToolError(
+                                "you already made this exact call and got the result above; "
+                                "it will not change. Change your approach: different file, "
+                                "different method, or submit your best candidate.")
                     seen_calls.add(sig)
+                    sig_by_id[c["id"]] = sig
                     if name == "submit_flag":
                         ok = target.check(str(args.get("flag", "")))
                         out = "CORRECT" if ok else "INCORRECT"
@@ -166,6 +297,14 @@ def run_agent(target: Target, workspace: Path, limits: Limits, trace_path: Path)
                     out = f"error: {e}"
                 log("tool", name=name, result=out)
                 messages.append({"role": "tool", "tool_call_id": c["id"], "content": out})
+
+            # Context management: keep the recent window, stub out stale outputs.
+            if (limits.max_total_tokens and in_tok
+                    and in_tok > 0.5 * limits.max_total_tokens):
+                freed = _elide_old_tool_results(messages, sig_by_id, replay_once,
+                                                stubbed_ids)
+                if freed:
+                    log("elide", freed_chars=freed)
             if done:
                 break
         else:
@@ -173,6 +312,11 @@ def run_agent(target: Target, workspace: Path, limits: Limits, trace_path: Path)
     finally:
         fh.close()
 
+    try:
+        from ctf_agent.metrics import estimate_cost
+        cost = estimate_cost(in_tok, out_tok)
+    except Exception:  # noqa: BLE001
+        cost = None
     return Result(
         verified=verified,
         status=status,
@@ -180,5 +324,8 @@ def run_agent(target: Target, workspace: Path, limits: Limits, trace_path: Path)
         input_tokens=in_tok,
         output_tokens=out_tok,
         elapsed_s=round(time.monotonic() - t0, 2),
+        model_calls=model_calls,
+        tool_calls=tool_calls,
+        estimated_cost_usd=cost,
         events=events,
     )
