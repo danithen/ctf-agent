@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Run {{ run_id }} — CTF Agent{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1><span class="mono" style="font-size:18px;">{{ run_id }}</span></h1>
+  <p>
+    {% if summary.get('verified') %}
+      <span class="badge ok">SOLVED</span>
+    {% else %}
+      <span class="badge err">{{ summary.get('status', 'unknown') }}</span>
+    {% endif %}
+    {% if summary.get('model') %}<span class="badge">{{ summary['model'] }}</span>{% endif %}
+    <a href="{{ url_for('report') }}" style="margin-left:6px; font-size:13px;">← all reports</a>
+  </p>
+</div>
+
+{# ---- run facts ---- #}
+<div class="card" style="padding:14px 18px; margin-bottom:16px;">
+  <table class="data">
+    <tbody>
+      <tr><td class="muted">Challenge</td><td>{{ summary.get('challenge_id', '–') }}</td></tr>
+      <tr><td class="muted">Trial</td><td>{{ summary.get('trial', '–') }}</td></tr>
+      <tr><td class="muted">Status</td><td>{{ summary.get('status', '–') }}</td></tr>
+      <tr><td class="muted">Steps</td><td>{{ summary.get('steps', '–') }}</td></tr>
+      <tr><td class="muted">Model / tool calls</td><td>{{ summary.get('model_calls', '–') }} / {{ summary.get('tool_calls', '–') }}</td></tr>
+      <tr><td class="muted">Tokens (in / out)</td><td>{{ summary.get('input_tokens', '–') }} / {{ summary.get('output_tokens', '–') }}</td></tr>
+      <tr><td class="muted">Elapsed</td><td>{{ summary.get('elapsed_s', '–') }}s</td></tr>
+      {% if summary.get('estimated_cost_usd') is not none %}
+      <tr><td class="muted">Est. cost</td><td>${{ '%.4f'|format(summary.estimated_cost_usd) }}</td></tr>
+      {% endif %}
+    </tbody>
+  </table>
+</div>
+
+{# ---- trace ---- #}
+<div class="card" style="overflow:hidden; margin-bottom:16px;">
+  <div style="padding:12px 16px; border-bottom:1px solid var(--border); display:flex; align-items:center;">
+    <span class="muted" style="font-size:11px; text-transform:uppercase; letter-spacing:.7px; font-weight:600;">Trace — {{ events|length }} events</span>
+  </div>
+  <div class="feed" style="max-height:560px;">
+    {% for ev in events %}{% include "_event.html" %}{% endfor %}
+    {% if not events %}<div class="ev muted">No trace events recorded for this run.</div>{% endif %}
+  </div>
+</div>
+{% endblock %}

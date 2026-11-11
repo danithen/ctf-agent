@@ -32,7 +32,7 @@ def pass_at_k(n: int, c: int, k: int) -> float:
 
 
 def _tokens(rows: list[dict], key: str) -> float | None:
-    vals = [r[key] for r in rows]
+    vals = [r.get(key) for r in rows]
     return None if any(v is None for v in vals) else mean(vals)
 
 
@@ -48,6 +48,8 @@ def summarize(path: Path) -> dict:
         outcomes = [int(r["verified"]) for r in rs]
         c = sum(outcomes)
         ins, outs = _tokens(rs, "input_tokens"), _tokens(rs, "output_tokens")
+        model_calls = _tokens(rs, "model_calls")
+        tool_calls = _tokens(rs, "tool_calls")
         per[cid] = {
             "trials": n,
             "successes": c,
@@ -57,6 +59,8 @@ def summarize(path: Path) -> dict:
             "mean_input_tokens": ins,
             "mean_output_tokens": outs,
             "mean_total_tokens": None if ins is None or outs is None else ins + outs,
+            "mean_model_calls": model_calls,
+            "mean_tool_calls": tool_calls,
             "mean_elapsed_s": mean(r["elapsed_s"] for r in rs),
             "total_elapsed_s": sum(r["elapsed_s"] for r in rs),
             "statuses": [r["status"] for r in rs],

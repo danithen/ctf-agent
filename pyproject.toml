@@ -7,6 +7,9 @@ dependencies = [
     "langchain-core>=1.8.0",
     "langchain-openai>=1.7.4",
     "langsmith>=0.14.17",
+    "textual>=8.2.8",
+    "textual-plotext>=1.0.1",
+    "flask>=3.0",
 ]
 
 [project.optional-dependencies]
@@ -16,6 +19,7 @@ bench = [
 
 [project.scripts]
 ctf-agent = "ctf_agent.cli:main"
+ctf-flask-gui = "ctf_agent.flask_gui:main"
 
 [dependency-groups]
 dev = ["pytest>=8", "ruff>=0.6"]

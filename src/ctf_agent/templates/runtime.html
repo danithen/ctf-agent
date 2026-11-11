@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% block title %}Runtime — CTF Agent{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Runtime</h1>
+  <p>Live agent progress — model messages, tool calls, and verdicts stream in as each run executes.</p>
+</div>
+
+{% if not jobs %}
+  <div class="card" style="padding:34px; text-align:center;">
+    <p class="muted" style="margin:0 0 14px;">No runs yet. Pick challenges on the Selection tab and hit <strong>Run selected</strong>.</p>
+    <a class="btn ghost" href="{{ url_for('index') }}">Go to Selection</a>
+  </div>
+{% else %}
+<div class="grid" style="gap:16px;">
+  {% for job in jobs %}
+  <div class="card" id="job-{{ job.id }}" data-job="{{ job.id }}" style="overflow:hidden;">
+    <div class="job-head" style="display:flex; align-items:center; gap:14px; padding:12px 16px; border-bottom:1px solid var(--border); flex-wrap:wrap;">
+      <span class="mono" style="font-weight:700; font-size:13.5px;">{{ job.cid }}</span>
+      <span class="status {{ job.status }}" data-role="status">{{ job.status }}</span>
+      <span data-role="verdict"></span>
+      <span class="spacer" style="flex:1"></span>
+      <span class="muted mono" style="font-size:11.5px;" data-role="stats">
+        model {{ job.model_calls }} · tool {{ job.tool_calls }}{% if job.elapsed_s is not none %} · {{ job.elapsed_s }}s{% endif %}
+      </span>
+      <a class="muted" style="font-size:12px;" href="{{ url_for('run_report', run_id=job.id) }}">report ↗</a>
+    </div>
+    <div class="feed" data-role="feed">
+      {% for ev in job.events %}{% include "_event.html" %}{% endfor %}
+      {% if not job.events %}<div class="ev muted">waiting for events…</div>{% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+{% if jobs %}
+<script>
+  const JOB_IDS = {{ job_ids | tojson }};
+  const rendered = {};          // job id -> number of events already drawn
+
+  function esc(s) {
+    return String(s ?? '').replace(/[&<>"']/g,
+      c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  function eventHTML(ev) {
+    if (ev.kind === 'model') {
+      let html = `<div class="ev model">`;
+      html += `<div class="ev-head"><span class="ev-kind">model</span>`;
+
+      if (ev.tool_calls && ev.tool_calls.length) {
+        for (const tc of ev.tool_calls) {
+          const args = tc.args && tc.args !== '{}' ? ' ' + esc(tc.args) : '';
+          if (args.length > 240) {
+            html += `<details class="tc-details" style="display:inline"><summary class="tc-chip">${esc(tc.name)}</summary><pre>${esc(tc.args)}</pre></details>`;
+          } else {
+            html += `<span class="tc-chip">${esc(tc.name)}<span class="args">${args === '' ? '' : ' ' + args.replace(/</g,'&lt;')}</span></span>`;
+          }
+        }
+      }
+      if (ev.in != null || ev.out != null) {
+        html += `<span style="margin-left:auto" class="t">${ev.in ?? '–'} in / ${ev.out ?? '–'} out</span>`;
+      }
+      html += `</div>`;
+      if (ev.reasoning) html += `<div class="reason">${esc(ev.reasoning)}</div>`;
+      if (ev.content)   html += `<div class="txt">${esc(ev.content)}</div>`;
+      return html + `</div>`;
+    }
+    if (ev.kind === 'tool') {
+      const big = (ev.result || '').length > 220;
+      const body = big
+        ? `<details class="tc-details"><summary>show output (${ev.result.length} chars)</summary><pre>${esc(ev.result)}</pre></details>`
+        : `<pre>${esc(ev.result)}</pre>`;
+      return `<div class="ev"><div class="ev-head"><span class="ev-kind">tool</span>` +
+             `<span class="mono" style="font-weight:600;">${esc(ev.name)}</span>` +
+             `<span class="t">t=${ev.t}s</span></div>${body}</div>`;
+    }
+    if (ev.kind === 'submission') {
+      return `<div class="ev"><div class="ev-head"><span class="ev-kind">submission</span>` +
+             `<span class="${ev.verified ? 'pill-ok">✓ correct flag' : 'pill-err">✗ incorrect'}</span>` +
+             `<span class="t">t=${ev.t}s</span></div></div>`;
+    }
+    return `<div class="ev"><div class="ev-head"><span class="ev-kind">${esc(ev.kind)}</span></div></div>`;
+  }
+
+  function appendEvents(job) {
+    const box = document.querySelector(`[data-job="${job.id}"] [data-role="feed"]`);
+    if (!box) return;
+    // drop the placeholder if present
+    if (rendered[job.id] === undefined) {
+      box.querySelectorAll('.ev').forEach(el => {
+        if (el.textContent.trim() === 'waiting for events…') el.remove();
+      });
+      rendered[job.id] = box.querySelectorAll('.ev').length;
+    }
+    const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+    while (rendered[job.id] < job.events.length) {
+      box.insertAdjacentHTML('beforeend', eventHTML(job.events[rendered[job.id]++]));
+    }
+    if (nearBottom) box.scrollTop = box.scrollHeight;
+  }
+
+  function updateHead(job) {
+    const head = document.getElementById('job-' + job.id);
+    if (!head) return;
+    const st = head.querySelector('[data-role="status"]');
+    st.textContent = job.status;
+    st.className = 'status ' + job.status;
+    head.querySelector('[data-role="stats"]').textContent =
+      `model ${job.model_calls} · tool ${job.tool_calls}` +
+      (job.elapsed_s != null ? ` · ${job.elapsed_s}s` : '');
+    const v = head.querySelector('[data-role="verdict"]');
+    if (job.status === 'done' || job.status === 'error') {
+      const ok = job.solved;
+      v.innerHTML = `<span class="badge ${ok ? 'ok' : 'err'}">${ok ? 'SOLVED' : esc(job.verdict || 'FAILED')}</span>`;
+    }
+  }
+
+  let anyActive = true;
+  async function poll() {
+    try {
+      const r = await fetch('/api/jobs?ids=' + JOB_IDS.join(','));
+      const data = await r.json();
+      anyActive = data.jobs.some(j => j.status === 'running' || j.status === 'queued');
+      for (const job of data.jobs) { appendEvents(job); updateHead(job); }
+    } catch (e) { /* transient network blip — just retry */ }
+    if (anyActive) setTimeout(poll, 1000);
+  }
+  poll();
+</script>
+{% endif %}
+{% endblock %}

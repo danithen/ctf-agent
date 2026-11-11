@@ -49,7 +49,7 @@ def run_sandboxed(
         "PYTHONDONTWRITEBYTECODE": "1",
     }
     proc = subprocess.Popen(
-        argv,
+        ["unshare", "-rn"] + argv,
         cwd=workspace,
         env=env,
         stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,

@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}Selection — CTF Agent{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Challenges</h1>
+  <p>Select challenges to run — each runs one trial with the configured limits.
+     {% if challenges %}{{ challenges|length }} available.{% endif %}</p>
+</div>
+
+{% if not challenges %}
+  <div class="card" style="padding:34px; text-align:center;">
+    <p class="muted" style="margin:0;">No challenges found. Check <code>configs/scored_set.json</code> and <code>CTF_DATASET_JSON</code>.</p>
+  </div>
+{% else %}
+<form method="post" action="{{ url_for('run_start') }}" id="sel-form">
+  <div style="display:flex; align-items:center; gap:14px; margin-bottom:14px;">
+    <label style="display:flex; gap:8px; align-items:center; font-size:13.5px; color:var(--muted); cursor:pointer;">
+      <input type="checkbox" id="select-all"> Select all
+    </label>
+    <span class="spacer" style="flex:1"></span>
+    <span id="count" class="badge">0 selected</span>
+    <button class="btn" type="submit" id="run-btn" disabled>Run selected</button>
+  </div>
+
+  <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(250px,1fr));">
+    {% for cid, info in challenges %}
+    <label class="card chal-card" style="display:block; padding:14px 16px; cursor:pointer; transition:border-color .15s;">
+      <input type="checkbox" class="chal-cb" name="challenge_ids" value="{{ cid }}" style="position:absolute; opacity:0;">
+      <div style="display:flex; align-items:flex-start; gap:10px;">
+        <span class="cb-mark" aria-hidden="true" style="width:18px; height:18px; margin-top:2px; flex:none; border:1px solid var(--border); border-radius:5px; display:inline-flex; align-items:center; justify-content:center; font-size:12px; color:transparent;">✓</span>
+        <span style="flex:1;">
+          <span class="mono" style="font-size:13px; font-weight:700; word-break:break-all;">{{ cid }}</span>
+          <span style="display:flex; gap:6px; margin-top:7px; flex-wrap:wrap;">
+            <span class="badge accent">{{ info.get('category', 'N/A') }}</span>
+            <span class="badge">{{ info.get('event', 'N/A') }} {{ info.get('year', '') }}</span>
+          </span>
+        </span>
+      </div>
+    </label>
+    {% endfor %}
+  </div>
+</form>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<style>
+  .chal-card:has(.chal-cb:checked) { border-color: var(--accent); background: rgba(124,156,255,.06); }
+  .chal-card:has(.chal-cb:checked) .cb-mark { background: var(--accent); border-color: var(--accent); color: #0b0d12; }
+  .chal-card:hover { border-color: var(--accent); }
+</style>
+{% if challenges %}
+<script>
+  const cbs = [...document.querySelectorAll('.chal-cb')];
+  const count = document.getElementById('count');
+  const runBtn = document.getElementById('run-btn');
+  const all = document.getElementById('select-all');
+  function refresh() {
+    const n = cbs.filter(c => c.checked).length;
+    count.textContent = n + ' selected';
+    runBtn.disabled = n === 0;
+    all.checked = n === cbs.length;
+    all.indeterminate = n > 0 && n < cbs.length;
+  }
+  cbs.forEach(c => c.addEventListener('change', refresh));
+  all.addEventListener('change', () => { cbs.forEach(c => c.checked = all.checked); refresh(); });
+  refresh();
+</script>
+{% endif %}
+{% endblock %}

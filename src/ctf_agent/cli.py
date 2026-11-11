@@ -43,6 +43,9 @@ def main(argv: list[str] | None = None) -> int:
         "steps": result.steps,
         "input_tokens": result.input_tokens,
         "output_tokens": result.output_tokens,
+        "model_calls": result.model_calls,
+        "tool_calls": result.tool_calls,
+        "estimated_cost_usd": result.estimated_cost_usd,
         "elapsed_s": result.elapsed_s,
         "trace_file": str(runs / "trace.jsonl"),
     }

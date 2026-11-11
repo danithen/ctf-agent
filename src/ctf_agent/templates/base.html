@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}CTF Agent{% endblock %}</title>
+  <style>
+    :root {
+      --bg: #0f1115; --panel: #161922; --panel-2: #1c202a; --border: #262b36;
+      --text: #e7eaf0; --muted: #8b93a7; --accent: #7c9cff;
+      --ok: #5dd39e; --err: #ff7b7b; --warn: #ffc861;
+      --radius: 10px; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    html { color-scheme: dark; }
+    body {
+      margin: 0; background: var(--bg); color: var(--text);
+      font: 15px/1.55 Inter, system-ui, "Segoe UI", Roboto, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    code, pre, .mono { font-family: var(--mono); font-size: 12.5px; }
+
+    /* ---- navigation ---- */
+    .nav {
+      position: sticky; top: 0; z-index: 50; height: 54px;
+      display: flex; align-items: center; gap: 28px; padding: 0 24px;
+      background: rgba(15,17,21,.88); backdrop-filter: blur(8px);
+      border-bottom: 1px solid var(--border);
+    }
+    .brand { font-weight: 700; letter-spacing: .2px; display: flex; align-items: center; gap: 9px; color: var(--text); }
+    .brand:hover { text-decoration: none; }
+    .brand .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+    .tabs { display: flex; gap: 2px; height: 100%; }
+    .tabs a {
+      display: flex; align-items: center; padding: 0 14px; color: var(--muted);
+      font-size: 14px; border-bottom: 2px solid transparent; margin-bottom: -1px;
+    }
+    .tabs a:hover { color: var(--text); text-decoration: none; }
+    .tabs a.active { color: var(--text); border-color: var(--accent); }
+    .nav .spacer { flex: 1; }
+
+    .wrap { max-width: 1080px; margin: 0 auto; padding: 30px 24px 70px; }
+    .page-head { margin-bottom: 22px; }
+    .page-head h1 { font-size: 21px; font-weight: 650; margin: 0 0 3px; }
+    .page-head p { margin: 0; color: var(--muted); font-size: 13.5px; }
+
+    /* ---- primitives ---- */
+    .card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); }
+    .grid { display: grid; gap: 14px; }
+    .btn {
+      display: inline-flex; align-items: center; gap: 8px; padding: 8px 16px;
+      background: var(--accent); color: #0b0d12; border: 0; border-radius: 8px;
+      font-size: 14px; font-weight: 600; cursor: pointer;
+    }
+    .btn:hover { filter: brightness(1.1); text-decoration: none; }
+    .btn.ghost { background: transparent; color: var(--text); border: 1px solid var(--border); }
+    .btn.ghost:hover { border-color: var(--accent); color: var(--accent); }
+    .btn:disabled { opacity: .45; cursor: not-allowed; }
+    .badge {
+      display: inline-block; padding: 2px 9px; border-radius: 999px;
+      font-size: 11.5px; font-weight: 600; letter-spacing: .3px;
+      background: var(--panel-2); border: 1px solid var(--border); color: var(--muted);
+    }
+    .badge.ok { color: var(--ok); border-color: rgba(93,211,158,.35); background: rgba(93,211,158,.08); }
+    .badge.err { color: var(--err); border-color: rgba(255,123,123,.35); background: rgba(255,123,123,.08); }
+    .badge.warn { color: var(--warn); border-color: rgba(255,200,97,.35); background: rgba(255,200,97,.08); }
+    .badge.accent { color: var(--accent); border-color: rgba(124,156,255,.4); background: rgba(124,156,255,.1); }
+    .muted { color: var(--muted); }
+    .pill-ok, .pill-err { font-weight: 700; }
+    .pill-ok { color: var(--ok); } .pill-err { color: var(--err); }
+
+    /* ---- flash messages ---- */
+    .flashes { margin-bottom: 16px; }
+    .flash {
+      padding: 10px 14px; border-radius: 8px; margin-bottom: 8px; font-size: 13.5px;
+      border: 1px solid var(--border); background: var(--panel);
+    }
+    .flash.err { border-color: rgba(255,123,123,.4); color: var(--err); }
+    .flash.warn { border-color: rgba(255,200,97,.4); color: var(--warn); }
+    .flash.ok { border-color: rgba(93,211,158,.4); color: var(--ok); }
+
+    /* ---- data table ---- */
+    table.data { width: 100%; border-collapse: collapse; font-size: 13px; }
+    table.data th {
+      text-align: right; padding: 9px 12px; color: var(--muted);
+      font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .6px;
+      border-bottom: 1px solid var(--border); white-space: nowrap;
+    }
+    table.data th:first-child, table.data td:first-child { text-align: left; }
+    table.data td { padding: 9px 12px; border-bottom: 1px solid var(--border); text-align: right; font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
+    table.data td:first-child { font-family: Inter, system-ui, sans-serif; font-size: 13.5px; }
+    table.data tr:last-child td { border-bottom: 0; }
+    table.data tbody tr:hover { background: var(--panel-2); }
+    table.data tfoot td { font-weight: 700; border-top: 1px solid var(--border); color: var(--text); }
+    .num-good { color: var(--ok); }
+
+    /* ---- live feed ---- */
+    .feed { max-height: 420px; overflow-y: auto; padding: 8px 0; scrollbar-width: thin; }
+    .ev { padding: 7px 16px; font-size: 13px; border-left: 2px solid transparent; }
+    .ev:hover { background: var(--panel-2); }
+    .ev.model { border-left-color: var(--accent); }
+    .ev.tool { border-left-color: var(--warn); }
+    .ev .ev-head { display: flex; gap: 10px; align-items: baseline; margin-bottom: 2px; }
+    .ev .ev-kind { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .7px; }
+    .ev.model .ev-kind { color: var(--accent); } .ev.tool .ev-kind { color: var(--warn); }
+    .ev .t { color: var(--muted); font-family: var(--mono); font-size: 11px; margin-left: auto; }
+    .ev .txt { white-space: pre-wrap; word-break: break-word; color: var(--text); }
+    .ev .reason { color: var(--muted); font-style: italic; white-space: pre-wrap; word-break: break-word; font-size: 12.5px; }
+    .tc-chip {
+      display: inline-block; margin: 3px 6px 0 0; padding: 2px 9px; border-radius: 6px;
+      background: var(--panel-2); border: 1px solid var(--border);
+      font-family: var(--mono); font-size: 12px; cursor: default;
+    }
+    .tc-chip .args { color: var(--muted); }
+    .ev pre {
+      margin: 4px 0 2px; padding: 8px 10px; background: #101319; border: 1px solid var(--border);
+      border-radius: 6px; white-space: pre-wrap; word-break: break-word; max-height: 200px; overflow-y: auto;
+    }
+    .tc-details summary { cursor: pointer; color: var(--muted); font-size: 11px; padding: 2px 0; }
+    .tc-details pre { margin-top: 3px; max-height: 160px; }
+
+    {# status pills for jobs #}
+    .status { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .7px; }
+    .status.queued { color: var(--muted); }
+    .status.running { color: var(--accent); }
+    .status.running::after { content: ""; display: inline-block; width: 7px; height: 7px; margin-left: 6px; border-radius: 50%; background: var(--accent); animation: pulse 1.1s infinite; }
+    .status.done { color: var(--ok); }
+    .status.error { color: var(--err); }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .25; } }
+  </style>
+  {% block extra_head %}{% endblock %}
+</head>
+<body>
+<nav class="nav">
+  <a class="brand" href="{{ url_for('index') }}"><span class="dot"></span>CTF Agent</a>
+  <div class="tabs">
+    <a href="{{ url_for('index') }}" class="{{ 'active' if active_tab == 'selection' }}">Selection</a>
+    <a href="{{ url_for('runtime') }}" class="{{ 'active' if active_tab == 'runtime' }}">Runtime</a>
+    <a href="{{ url_for('report') }}" class="{{ 'active' if active_tab == 'report' }}">Report</a>
+  </div>
+  <span class="spacer"></span>
+</nav>
+<div class="wrap">
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}<div class="flashes">
+      {% for cat, msg in messages %}<div class="flash {{ cat }}">{{ msg }}</div>{% endfor %}
+    </div>{% endif %}
+  {% endwith %}
+  {% block content %}{% endblock %}
+</div>
+{% block extra_js %}{% endblock %}
+</body>
+</html>

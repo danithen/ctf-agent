@@ -1,0 +1,35 @@
+{# One trace event, server-rendered (mirrors the JS renderer in runtime.js-ish logic) #}
+{% if ev.kind == 'model' %}
+<div class="ev model">
+  <div class="ev-head">
+    <span class="ev-kind">model</span>
+    {% for tc in ev.tool_calls or [] %}
+      <span class="tc-chip">{{ tc.function.name if tc.function else tc.name }}</span>
+    {% endfor %}
+    {% if ev.input_tokens is not none or ev.output_tokens is not none %}
+      <span class="t">{{ ev.input_tokens if ev.input_tokens is not none else '–' }} in / {{ ev.output_tokens if ev.output_tokens is not none else '–' }} out</span>
+    {% endif %}
+  </div>
+  {% if ev.reasoning %}<div class="reason">{{ ev.reasoning }}</div>{% endif %}
+  {% if ev.content %}<div class="txt">{{ ev.content }}</div>{% endif %}
+</div>
+{% elif ev.kind == 'tool' %}
+<div class="ev tool">
+  <div class="ev-head">
+    <span class="ev-kind">tool</span>
+    <span class="mono" style="font-weight:600;">{{ ev.name }}</span>
+    <span class="t">t={{ ev.t }}s</span>
+  </div>
+  <pre>{{ ev.result }}</pre>
+</div>
+{% elif ev.kind == 'submission' %}
+<div class="ev">
+  <div class="ev-head">
+    <span class="ev-kind">submission</span>
+    {% if ev.verified %}<span class="pill-ok">✓ correct flag</span>{% else %}<span class="pill-err">✗ incorrect</span>{% endif %}
+    <span class="t">t={{ ev.t }}s</span>
+  </div>
+</div>
+{% else %}
+<div class="ev"><div class="ev-head"><span class="ev-kind">{{ ev.kind }}</span></div></div>
+{% endif %}

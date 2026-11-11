@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}Report — CTF Agent{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Report</h1>
+  <p>Aggregated metrics across every attempt logged in <span class="mono">{{ results_root }}</span>.</p>
+</div>
+
+{% if not data or not data.overall.get('attempts') %}
+  <div class="card" style="padding:34px; text-align:center;">
+    <p class="muted" style="margin:0 0 14px;">No attempts recorded yet. Run some challenges to build a report.</p>
+    <a class="btn ghost" href="{{ url_for('index') }}">Go to Selection</a>
+  </div>
+{% else %}
+{%- set ov = data.overall -%}
+
+{# ---- headline stat cards ---- #}
+<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); margin-bottom:16px;">
+  {% set solved_rate = (ov.average_solve_rate_pct or 0)|round(1) %}
+  {% set cards = [
+    ('Attempts', ov.attempts|string, false),
+    ('Solved', ov.successes|string ~ ' / ' ~ ov.challenges, ov.successes > 0),
+    ('Solve rate', solved_rate|string ~ '%', solved_rate >= 50.0),
+    ('Wall time', (ov.total_elapsed_s or 0)|round(1)|string ~ 's', false),
+    ('Model calls', (ov.total_model_calls if ov.total_model_calls is not none else '–')|string, false),
+    ('Tool calls', (ov.total_tool_calls if ov.total_tool_calls is not none else '–')|string, false),
+    ('Est. cost', '', ov.total_cost_usd is not none),
+  ] %}
+  {% for label, value, good in cards %}
+  <div class="card" style="padding:13px 16px;">
+    <div class="muted" style="font-size:11px; text-transform:uppercase; letter-spacing:.7px; font-weight:600;">{{ label }}</div>
+    <div style="font-size:19px; font-weight:650; margin-top:3px; {{ 'color:var(--ok);' if good }}">{% if label == 'Est. cost' %}{% if ov.total_cost_usd is not none %}${{ ov.total_cost_usd|round(4) }}{% else %}–{% endif %}{% else %}{{ value }}{% endif %}</div>
+  </div>
+  {% endfor %}
+</div>
+
+{# ---- pass@k bars ---- #}
+<div class="card" style="padding:16px 18px; margin-bottom:16px;">
+  <div class="muted" style="font-size:11px; text-transform:uppercase; letter-spacing:.7px; font-weight:600; margin-bottom:12px;">Pass@k — average across challenges</div>
+  {% for k in [1, 2, 3] %}
+    {% set v = ov.pass_at_k.get(k, 0) * 100 %}
+    <div style="display:flex; align-items:center; gap:12px; margin-bottom:{{ 10 if not loop.last else 0 }}px;">
+      <span class="mono muted" style="width:64px; font-size:12px;">pass@{{ k }}</span>
+      <div style="flex:1; height:10px; background:var(--panel-2); border-radius:999px; overflow:hidden;">
+        <div style="width:{{ v|round(1) }}%; height:100%; background:linear-gradient(90deg, var(--accent), var(--ok)); border-radius:999px;"></div>
+      </div>
+      <span class="mono" style="width:64px; text-align:right; font-size:12.5px;">{{ v|round(1) }}%</span>
+    </div>
+  {% endfor %}
+</div>
+
+{# ---- per-challenge table ---- #}
+<div class="card" style="overflow-x:auto;">
+  <table class="data">
+    <thead><tr>
+      <th>Challenge</th><th>Trials</th><th>Solved</th><th>Rate %</th><th>SD&nbsp;pp</th>
+      <th>Pass@1</th><th>Pass@2</th><th>Pass@3</th>
+      <th>Model</th><th>Tool</th><th>Tokens</th><th>Time</th><th>Cost</th>
+    </tr></thead>
+    <tbody>
+    {% for cid, m in data.challenges.items() %}
+      {% set sd = m.sample_sd_pp %}
+      {% set tot = m.mean_total_tokens %}
+      {% set cost = m.total_cost_usd %}
+      <tr>
+        <td><a href="{{ url_for('run_report', run_id=m.attempts[0].run_id) if m.attempts else '#' }}">{{ cid }}</a></td>
+        <td>{{ m.trials }}</td>
+        <td>{{ m.successes }}</td>
+        <td>{{ m.success_rate_pct|round(1) }}%</td>
+        <td>{{ '%.1f'|format(sd) if sd is not none else '–' }}</td>
+        <td class="{{ 'num-good' if m.pass_at_k.get(1) == 1.0 }}">{{ (m.pass_at_k.get(1, 0) * 100)|round(1) }}%</td>
+        <td>{{ (m.pass_at_k.get(2, 0) * 100)|round(1) }}%</td>
+        <td>{{ (m.pass_at_k.get(3, 0) * 100)|round(1) }}%</td>
+        <td>{{ '%.1f'|format(m.mean_model_calls) if m.mean_model_calls is not none else '–' }}</td>
+        <td>{{ '%.1f'|format(m.mean_tool_calls) if m.mean_tool_calls is not none else '–' }}</td>
+        <td>{{ '%.0f'|format(tot) if tot is not none else '–' }}</td>
+        <td>{{ '%.1fs'|format(m.mean_elapsed_s) if m.mean_elapsed_s is not none else '–' }}</td>
+        <td>{{ '$%.4f'|format(cost) if cost is not none else '–' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+    <tfoot><tr>
+      <td>Total — {{ ov.attempts }} attempt{{ 's' if ov.attempts != 1 }}</td>
+      <td>{{ ov.attempts }}</td>
+      <td>{{ ov.successes }}</td>
+      <td>{{ (ov.average_solve_rate_pct or 0)|round(1) }}%</td>
+      <td>{{ '%.1f'|format(ov.solve_rate_sd_pp) if ov.solve_rate_sd_pp is not none else '–' }}</td>
+      <td>{{ (ov.pass_at_k.get(1, 0) * 100)|round(1) }}%</td>
+      <td>{{ (ov.pass_at_k.get(2, 0) * 100)|round(1) }}%</td>
+      <td>{{ (ov.pass_at_k.get(3, 0) * 100)|round(1) }}%</td>
+      <td>{{ ov.total_model_calls if ov.total_model_calls is not none else '–' }}</td>
+      <td>{{ ov.total_tool_calls if ov.total_tool_calls is not none else '–' }}</td>
+      <td>{{ ov.total_tokens if ov.total_tokens is not none else '–' }}</td>
+      <td>{{ (ov.total_elapsed_s or 0)|round(1) }}s</td>
+      <td>{{ '$%.4f'|format(ov.total_cost_usd) if ov.total_cost_usd is not none else '–' }}</td>
+    </tr></tfoot>
+  </table>
+</div>
+{% endif %}
+{% endblock %}

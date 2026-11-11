@@ -92,6 +92,9 @@ def chat_langchain(
 
     out = llm.invoke(lc)
     message: dict[str, Any] = {"role": "assistant", "content": out.content or None}
+    reasoning = (out.additional_kwargs or {}).get("reasoning_content")
+    if reasoning:
+        message["reasoning"] = reasoning
     if out.tool_calls:
         message["tool_calls"] = [
             {"id": tc["id"], "type": "function",
