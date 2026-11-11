@@ -320,14 +320,25 @@ def _tail_trace(job: Job, trace: Path, stop: threading.Event) -> None:
 
 
 def _execute(job: Job) -> None:
-    """Run one attempt synchronously (called on the worker thread)."""
+    """Run one attempt synchronously (called on the worker thread).
+
+    Retry chain rules: later attempts are skipped when an earlier attempt
+    solved, but also when an earlier attempt hit an infrastructure error —
+    the challenge repeats only if the MODEL failed it (a verdict such as
+    no_flag / token_budget / step_limit / timeout). An errored attempt is a
+    harness failure, not a model attempt, so we stop instead of retrying.
+    """
     job.status = "running"
-    if job.attempt > 1:  # retries only start when every earlier attempt failed
+    if job.attempt > 1:
         prior = [JOBS.get(f"{job.base_id}-t{k}") for k in range(1, job.attempt)]
         if any(p is not None and p.solved for p in prior):
             job.status = "done"
             job.verdict = "skipped"
             return  # no workspace, no trace, no attempt row — nothing ran
+        if any(p is not None and p.error for p in prior):
+            job.status = "done"
+            job.verdict = "cancelled — an earlier attempt errored; retries stop"
+            return
     trial = job.attempt
     dataset = os.environ.get("CTF_DATASET_JSON", "")
     run_dir = job.run_dir

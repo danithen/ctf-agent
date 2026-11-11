@@ -53,6 +53,9 @@ def env(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(flask_gui, "load_target", fake_target)
     monkeypatch.setattr(flask_gui, "stage_workspace", fake_stage)
     monkeypatch.setenv("CTF_DATASET_JSON", "benchmark/ctftiny.json")
+    # Deterministic retries for every GUI test: the developer's real .env may
+    # persist CTF_MAX_RETRIES (Config tab “Remember”), which must not leak in.
+    monkeypatch.setenv("CTF_MAX_RETRIES", "0")
     return runs, results
 
 
@@ -379,3 +382,41 @@ def test_job_payload_includes_meta_and_done_events(env, env_guard):
     assert meta["trial"] == 1 and meta["max_attempts"] == 3 and meta["model"] == "fake"
     assert done["kind"] == "done" and done["status"] == "solved"
     assert done["verified"] is True and done["steps"] == 7
+
+
+def test_retry_stops_on_infra_error_not_model_failure(env, env_guard, monkeypatch):
+    """Only MODEL failures repeat. An errored attempt (infra) stops the chain:
+    no retry, later attempts cancelled, and nothing recorded for them."""
+    calls: list[int] = []
+
+    def ra(*a, **k):
+        calls.append(1)
+        raise RuntimeError("gateway unreachable")
+
+    monkeypatch.setattr(flask_gui, "run_agent", ra)
+    monkeypatch.setenv("CTF_MAX_RETRIES", "2")
+    flask_gui.JOBS.clear()
+    flask_gui.SESSION_ATTEMPTS.clear()
+    app.test_client().post("/run/start", data={"challenge_ids": ["rev-x"]})
+    _drain()
+    assert len(calls) == 1                          # errored attempt never retried
+    t2, t3 = flask_gui.JOBS["rev-x-test-t2"], flask_gui.JOBS["rev-x-test-t3"]
+    for t in (t2, t3):
+        assert t.status == "done" and not t.solved
+        assert t.verdict.startswith("cancelled — an earlier attempt errored")
+    rows = [r for r in (flask_gui.RESULTS_ROOT / "attempts.jsonl").read_text().splitlines() if r]
+    assert len(rows) == 1                           # just the errored attempt, no retries
+
+
+def test_model_failure_verdicts_still_retry(env, env_guard, monkeypatch):
+    """Budget/step-limit verdicts are the model failing → the chain continues."""
+    results = [_dummy_run(False, "token_budget"), _dummy_run(True, "solved")]
+    monkeypatch.setattr(flask_gui, "run_agent", lambda *a, **k: results.pop(0))
+    monkeypatch.setenv("CTF_MAX_RETRIES", "1")
+    flask_gui.JOBS.clear()
+    flask_gui.SESSION_ATTEMPTS.clear()
+    app.test_client().post("/run/start", data={"challenge_ids": ["rev-x"]})
+    _drain()
+    assert [flask_gui.JOBS[i].verdict
+            for i in ("rev-x-test-t1", "rev-x-test-t2")] == ["token_budget", "solved"]
+    assert len(flask_gui.JOBS) == 2                 # t2 ran, nothing skipped/cancelled
