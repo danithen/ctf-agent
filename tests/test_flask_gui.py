@@ -59,6 +59,9 @@ def env(monkeypatch, tmp_path: Path):
     return runs, results
 
 
+@pytest.mark.skipif(not Path("benchmark/ctftiny.json").exists(),
+                    reason="benchmark dataset (git-ignored) not present locally "
+                           "— e.g. in the container image, which is built without it")
 def test_selection_lists_challenges(env):
     client = app.test_client()
     resp = client.get("/")

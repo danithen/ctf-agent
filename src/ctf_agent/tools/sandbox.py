@@ -75,8 +75,11 @@ def run_sandboxed(
             "install it with 'sudo apt install bubblewrap'."
         )
     home = Path(tempfile.mkdtemp(prefix="ctf-home-", dir=workspace.parent))
+    # Fixed PATH constant — deliberately NOT the parent's PATH, so nothing
+    # leaks in; /usr/local/bin covers official python:*-slim images (and
+    # /usr/bin:/bin covers system distros), keeping this host-portable.
     env = {
-        "PATH": "/usr/bin:/bin",
+        "PATH": "/usr/local/bin:/usr/bin:/bin",
         "HOME": str(home),
         "LANG": "C.UTF-8",
         "PYTHONDONTWRITEBYTECODE": "1",

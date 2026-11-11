@@ -46,9 +46,16 @@ load_env()
 
 # ---------------------------------------------------------------------------
 #  Configuration
+#
+#  Paths resolve against the package root (repo root on hosts, /app in the
+#  container), NOT the process cwd — the GUI is relocatable and cwd-proof.
+#  The dataset path has an env override (CTF_DATASET_JSON) because it may
+#  live anywhere; the scored set ships with the project; runs/results keep
+#  env-driven locations (CTF_RUNS_DIR, CTF_TUI_RESULTS).
 # ---------------------------------------------------------------------------
-CONFIG = Path("configs/scored_set.json")
-BENCH_DATA = Path("benchmark/ctftiny.json")
+_PKG_ROOT = Path(__file__).resolve().parent.parent.parent
+CONFIG = _PKG_ROOT / "configs" / "scored_set.json"
+BENCH_DATA = Path(os.environ.get("CTF_DATASET_JSON", _PKG_ROOT / "benchmark" / "ctftiny.json"))
 DOTENV_PATH = Path(".env")
 RESULTS_ROOT = Path(os.environ.get("CTF_TUI_RESULTS", "results/tui"))
 RUNS_ROOT = Path(os.environ.get("CTF_RUNS_DIR", "runs")) / "tui"
@@ -653,9 +660,19 @@ def run_report(run_id: str):
 #  Main entry point
 # ---------------------------------------------------------------------------
 def main() -> None:
+    """Serve the GUI.
+
+    Host/port/debug are environment-driven so the same entry point works on a
+    laptop (127.0.0.1:5000, live reloader) and inside a container
+    (CTF_GUI_HOST=0.0.0.0, CTF_GUI_DEBUG=0 — no reloader, which would fork a
+    second process that shares nothing with the worker thread running jobs).
+    """
     RUNS_ROOT.mkdir(parents=True, exist_ok=True)
     RESULTS_ROOT.mkdir(parents=True, exist_ok=True)
-    app.run(debug=True, port=5000)
+    port = int(os.environ.get("CTF_GUI_PORT", "5000"))
+    host = os.environ.get("CTF_GUI_HOST", "127.0.0.1")
+    debug = os.environ.get("CTF_GUI_DEBUG", "1") != "0"
+    app.run(host=host, port=port, debug=debug)
 
 
 if __name__ == "__main__":

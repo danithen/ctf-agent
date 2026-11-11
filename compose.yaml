@@ -1,0 +1,27 @@
+# Reproducible local run: `docker compose up --build`
+# The GUI serves on http://localhost:5000 with the same runs/ and results/
+# directories the host tooling uses. .env is mounted read-only — build it with
+# `cp .env.example .env` and fill in tokens; it is never baked into the image.
+services:
+  gui:
+    build: .
+    image: ctf-agent:latest
+    # Host port 5000 is often taken by a host-side GUI session; override with
+    # `CTF_GUI_HOST_PORT=5001 docker compose up` without editing this file.
+    ports:
+      - "${CTF_GUI_HOST_PORT:-5000}:5000"
+    security_opt:
+      - seccomp=unconfined   # outer filter only — the agent itself is jailed by bwrap
+    environment:
+      # Pin container paths explicitly: the mounted .env carries host-side
+      # relative paths (./benchmark, ./runs), and env vars beat .env values
+      # (the loader is override=False).
+      CTF_RUNS_DIR: /data/runs
+      CTF_TUI_RESULTS: /data/results
+      CTF_DATASET_JSON: /data/benchmark/ctftiny.json
+      CTF_BENCHMARK_DIR: /data/benchmark
+    volumes:
+      - ./benchmark:/data/benchmark:ro   # benchmark data stays out of the image
+      - ./runs:/data/runs
+      - ./results:/data/results
+      - ./.env:/app/.env:ro              # secrets injected at runtime only

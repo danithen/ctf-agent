@@ -77,6 +77,54 @@ Metrics from run artifacts:
 uv run python -m ctf_agent.aggregate results/scored/attempts.jsonl
 ```
 
+## Containers
+
+The project ships as a reproducible container (rebuild it anywhere and get the
+same software — base images are pinned by digest, and `uv sync --frozen`
+installs exactly the versions in `uv.lock`):
+
+```bash
+docker build --target test -t ctf-agent:test .   # build + run the pytest gate (no network, no tokens)
+docker build -t ctf-agent:latest .               # runtime image (GUI + CLI + server)
+docker compose up --build                        # GUI on http://localhost:5000
+docker compose down
+```
+
+The image deliberately excludes three machine-local things — `.env` (secrets),
+`benchmark/` (course dataset), and `runs/`+`results/` (your data) — which
+`compose.yaml` mounts read-only or shared at runtime:
+
+| Host | Container | Mounted as |
+|---|---|---|
+| `./.env` | `/app/.env` | read-only (secrets injected at runtime) |
+| `./benchmark` | `/data/benchmark` | read-only |
+| `./runs`, `./results` | `/data/runs`, `/data/results` | shared — container runs appear in host reports |
+
+CLI inside the container (secrets from `.env`, container paths forced with
+`-e`, which overrides `--env-file`):
+
+```bash
+docker run --rm --security-opt seccomp=unconfined --env-file .env \
+  -e CTF_RUNS_DIR=/data/runs -e CTF_TUI_RESULTS=/data/results \
+  -e CTF_DATASET_JSON=/data/benchmark/ctftiny.json -e CTF_BENCHMARK_DIR=/data/benchmark \
+  -v "$PWD/benchmark:/data/benchmark:ro" -v "$PWD/runs:/data/runs" -v "$PWD/results:/data/results" \
+  ctf-agent:latest ctf-agent rev-checker --dev
+```
+
+**Why `seccomp=unconfined`?** Docker's default seccomp profile blocks the
+user-namespace creation bubblewrap needs (`bwrap: No permissions to create new
+namespace`). Dropping the *outer* filter does not weaken the agent jail: what
+confines the agent is bwrap itself — no network, isolated pid/mount spaces,
+and a filesystem limited to workspace + read-only system dirs — while the
+container keeps cgroups and capability separation. The sandbox's own tests run
+inside this configuration in the `--target test` gate.
+
+Moving machines offline (no registry): `docker save ctf-agent:latest | gzip >
+ctf-agent.tar.gz`, copy the file and `docker load < ctf-agent.tar.gz` on the
+target machine; with a registry, `docker tag`/`push` the same image. In both
+cases bring the same `.env` + `benchmark/` data (never in the image) and runs
+continue with identical results directories.
+
 ## Fixed run limits (used for all reported attempts)
 
 30 steps · 15 min · 150 000 total-token cap · 4 000 tool-output chars ·
