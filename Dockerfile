@@ -21,8 +21,12 @@ ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
 
 # bubblewrap is a hard requirement of the agent sandbox — no silent fallback,
 # so it ships in the image rather than being documented as a manual step.
+# binutils (objdump/strings) · unzip · file (type triage) · bzip2/xz-utils:
+# the binary-analysis staples the agent must be able to rely on — their
+# absence caused exit-127 dead-ends on real runs (see docs/architecture.md).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends bubblewrap ca-certificates \
+    && apt-get install -y --no-install-recommends \
+        bubblewrap ca-certificates binutils unzip file bzip2 xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=ghcr.io/astral-sh/uv:0.13.1@sha256:4a1f3666816dafadd20ceb71eac9a7d56d7ef30279f7d64048519ab901ada336 /uv /usr/local/bin/uv

@@ -358,3 +358,14 @@ def test_meta_event_records_limits(tmp_path: Path, fake_chat):
     assert meta["kind"] == "meta"
     lim = meta["limits"]
     assert "30 steps" in lim and "150000 tokens" in lim and "≤3 submits" in lim
+
+
+def test_toolkit_prompt_documents_survival_facts():
+    """The SYSTEM prompt must carry the ACI facts runs actually died without:
+    the run_python write-first contract, the tail-truncation warning, and a
+    zero-dependency archive-extraction path (unzip may be absent)."""
+    sysprompt = agent_mod.SYSTEM
+    assert "write_file" in sysprompt and "2 steps" in sysprompt
+    assert "TRUNCATED AT THE TAIL" in sysprompt
+    assert "python3 -m zipfile" in sysprompt       # env-proof extraction
+    assert "python3 -m tarfile" in sysprompt

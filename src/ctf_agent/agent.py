@@ -56,6 +56,8 @@ SYSTEM = (
     "(; && ||) are blocked — pipe, or write a file instead.\n"
     "- run_python: executes a .py file you must write_file into the workspace first (2 steps); "
     "python3 is isolated; optional stdin. Print only the lines you need.\n"
+    "- Archives: an unzip binary may not exist; extract with the stdlib instead — run_command "
+    "`python3 -m zipfile -e handout.zip .` (zips, one step) or `python3 -m tarfile -e blob.tar.gz .`.\n"
     "- read_file: supports offset; returns only a summary for binary files — analyze binaries via "
     "run_command/run_python instead. write_file overwrites and allows max 20000 chars per call.\n"
     "\n"
