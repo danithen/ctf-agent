@@ -435,6 +435,7 @@ def test_dummy_run_rejects_no_flag_with_submissions(env, env_guard):
 
 ENV_KEYS.append("CTF_MAX_SUBMITS")
 ENV_KEYS.append("CTF_FEEDBACK_NOTE")
+ENV_KEYS.append("CTF_PROVISION")
 
 
 def test_make_limits_reads_ctf_max_submits(env, env_guard, monkeypatch):

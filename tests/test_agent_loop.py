@@ -369,3 +369,49 @@ def test_toolkit_prompt_documents_survival_facts():
     assert "TRUNCATED AT THE TAIL" in sysprompt
     assert "python3 -m zipfile" in sysprompt       # env-proof extraction
     assert "python3 -m tarfile" in sysprompt
+
+
+def test_provision_event_logged_when_enabled(tmp_path: Path, fake_chat,
+                                             monkeypatch):
+    """CTF_PROVISION=on → run_agent logs a `provision` event right after meta
+    with the honest per-package statuses from the pre-flight."""
+    monkeypatch.setenv("CTF_PROVISION", "on")
+    from ctf_agent.tools.provision import Preflight
+    seen_pf = {}
+
+    def fake_preflight(ws):
+        seen_pf["ws"] = ws
+        return Preflight(packages={"torch": "installed"},
+                         python="/usr/local/bin/python3")
+
+    monkeypatch.setattr(agent_mod, "preflight", fake_preflight)
+    ws = tmp_path / "ws"
+    write_description(ws)
+    fake_chat([
+        {"assistant": {"role": "assistant", "content": None,
+                       "tool_calls": [tool_call(1, "submit_flag", '{"flag": "flag{abc}"}')]}},
+    ])
+    trace = tmp_path / "trace.jsonl"
+    run_agent(make_target(), ws, basic_limits(4), trace)
+    lines = trace.read_text().splitlines()
+    kinds = [json.loads(l)["kind"] for l in lines]
+    assert kinds[:2] == ["meta", "provision"]
+    ev = json.loads(lines[1])
+    assert ev["packages"] == {"torch": "installed"}
+    assert "python3" in ev["python"]
+    assert seen_pf["ws"] == ws            # scanned the staged workspace itself
+
+
+def test_provision_disabled_by_default_no_probe(tmp_path: Path, fake_chat,
+                                                monkeypatch):
+    """CTF_PROVISION=off (suite default) → pre-flight never runs at all."""
+    monkeypatch.setattr(agent_mod, "preflight",
+                        lambda ws: (_ for _ in ()).throw(
+                            AssertionError("preflight must not run when off")))
+    ws = tmp_path / "ws"
+    write_description(ws)
+    fake_chat([
+        {"assistant": {"role": "assistant", "content": None,
+                       "tool_calls": [tool_call(1, "submit_flag", '{"flag": "flag{abc}"}')]}},
+    ])
+    run_agent(make_target(), ws, basic_limits(4), tmp_path / "trace.jsonl")

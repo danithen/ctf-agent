@@ -44,12 +44,20 @@ proved the agent reaches for (objdump, strings, nm, hexdump/xxd, file, unzip and
 compression tools) — these are installed by the Dockerfile; install the same list on
 the host so host and container behave identically.
 
-Deliberately **not** provided: no network (so no `pip` at run time), no ML packages
-(`torch` etc. — too heavy for the image; ML-artifact handouts are a known limitation),
-and no extra solver libraries beyond the standard library. Crypto challenges in the
-scored set so far solved with stdlib `hashlib`/`base64` alone; add a package to the
-image only when a run fails on a missing module and a lighter alternative doesn't
-exist (evidence-based curation — see `docs/architecture.md`).
+Deliberately **not** provided: no network for the agent (so no `pip` at run time),
+no default ML packages (`torch` etc. — too heavy to blanket-install), and no extra
+solver libraries beyond the standard library.
+
+Instead, a deterministic **pre-flight** (`tools/provision.py`) derives each run's real
+requirements from exactly what the agent can see — the staged handout files — through
+a small whitelist (`.pt` → torch; handout imports of `Crypto`/`numpy`/`sympy`/`z3`/
+`gmpy2`/`pwn` → their packages). Probe-before-install runs through the jail itself
+(the same interpreter and environment `run_python` gets), and installation happens
+at harness level (which does have a network; the jailed agent does not). Statuses
+(`present` / `installed` / `unavailable <reason>`) are logged to the trace and shown
+in the GUI. Workspace text can never name an arbitrary package — only whitelisted
+signatures trigger installs, and failures are recorded, never fatal.
+`CTF_PROVISION=off` disables the pre-flight entirely (ablations).
 
 Required in `.env`: `LITELLM_BASE_URL`, `LITELLM_TOKEN` (any OpenAI-compatible
 provider — Duke AI Gateway with Duke VPN, or e.g. Ollama Cloud at

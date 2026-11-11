@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -13,6 +14,7 @@ from langsmith import traceable
 
 from ctf_agent.llm import chat_langchain as chat
 from ctf_agent.runner import Target
+from ctf_agent.tools.provision import preflight
 from ctf_agent.tools.workspace import ToolError, Workspace
 
 TOOLS: list[dict[str, Any]] = [
@@ -251,6 +253,11 @@ def run_agent(
                            f"≤{limits.max_submits} submits · "
                            f"{limits.max_seconds // 60} min")
     log("meta", **meta_data)   # first line: run identity + caps
+    if os.environ.get("CTF_PROVISION", "on").strip().lower() != "off":
+        pf = preflight(workspace)   # handout-derived package needs (idempotent)
+        if pf.packages:
+            log("provision", packages=dict(pf.packages), python=pf.python,
+                summary=pf.summary)
     if feedback:
         log("feedback", chars=len(feedback))   # trace shows the attempt saw a handoff
 

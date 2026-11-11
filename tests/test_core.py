@@ -179,3 +179,53 @@ def test_run_python_allows_handout_sibling_imports(tmp_path: Path) -> None:
         "import handout_lib\nprint(hex(handout_lib.MAGIC))\n")
     out = ws.run_python("use_it.py")
     assert "0x539" in out
+
+
+def test_scan_requirements_is_whitelisted(tmp_path: Path) -> None:
+    """Signatures come only from the whitelist; arbitrary imports never map."""
+    from ctf_agent.tools.provision import scan_requirements
+    (tmp_path / "handout.py").write_text(
+        "import Crypto\nfrom collections import deque  # noise\n")
+    (tmp_path / "model.pt").write_bytes(b"\x00\x01")
+    (tmp_path / "notes.txt").write_text("pip install z3-solver; import z3\n")
+    assert dict(scan_requirements(tmp_path)) == {
+        "pycryptodome": "Crypto", "torch": "torch", "z3-solver": "z3"}
+
+
+def test_scan_requirements_ignores_stdlib_and_binaries(tmp_path: Path) -> None:
+    """stdlib imports and non-text files are never requirement signals."""
+    from ctf_agent.tools.provision import scan_requirements
+    (tmp_path / "script.py").write_text(
+        "import os, sys\nfrom struct import pack\n")
+    (tmp_path / "blob.bin").write_bytes(b"import torch\x00\x00")
+    assert scan_requirements(tmp_path) == []
+
+
+def test_preflight_statuses_are_honest(tmp_path: Path, monkeypatch) -> None:
+    """present / installed / unavailable — including the offline-host story."""
+    import subprocess
+
+    import ctf_agent.tools.provision as prov
+
+    states = {"ok": False}   # first probe fails; after (faked) install, ok
+
+    def fake_probe(mod, ws):
+        return states["ok"]
+    monkeypatch.setattr(prov, "_probe_import", fake_probe)
+
+    def fake_pip(cmd, **kw):
+        states["ok"] = True
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+    monkeypatch.setattr(prov.subprocess, "run", fake_pip)
+    st = prov._ensure_installed("torch", "torch", tmp_path, "/usr/bin/python3")
+    assert st == "installed"
+
+    monkeypatch.setattr(prov, "_probe_import", lambda mod, ws: False)
+    monkeypatch.setattr(prov.subprocess, "run",
+                        lambda cmd, **kw: subprocess.CompletedProcess(
+                            cmd, 1, "", "ERROR: b0rked wheel"))
+    st = prov._ensure_installed("torch", "torch", tmp_path, "/usr/bin/python3")
+    assert st == "unavailable (ERROR: b0rked wheel)"
+
+    st = prov._ensure_installed("torch", "torch", tmp_path, None)
+    assert st == "unavailable (no python3 on the jail PATH)"
