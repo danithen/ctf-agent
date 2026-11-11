@@ -36,7 +36,11 @@ def run_one(challenge_id: str, trial: int, limits: Limits, out: Path) -> dict:
     workspace = stage_workspace(target, run_dir / "workspace")
     t_start = time.time()
     try:
-        result = run_agent(target, workspace, limits, run_dir / "trace.jsonl")
+        result = run_agent(
+        target, workspace, limits, run_dir / "trace.jsonl",
+        metadata={"challenge": challenge_id, "run_id": run_id,
+                  "trial": trial, "model": os.environ.get("CTF_MODEL")},
+    )
         status, err = result.status, None
     except Exception as e:  # noqa: BLE001 - record infra failures as attempts, don't crash batch
         result = None

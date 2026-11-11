@@ -32,7 +32,11 @@ def main(argv: list[str] | None = None) -> int:
         max_output_tokens=int(os.environ.get("CTF_MAX_OUTPUT_TOKENS", "1024")),
         max_total_tokens=int(os.environ["CTF_MAX_TOTAL_TOKENS"]) if os.environ.get("CTF_MAX_TOTAL_TOKENS") else None,
     )
-    result = run_agent(target, workspace, limits, runs / "trace.jsonl")
+    result = run_agent(
+        target, workspace, limits, runs / "trace.jsonl",
+        metadata={"challenge": args.challenge_id, "run_id": run_id,
+                  "dev": args.dev, "model": os.environ.get("CTF_MODEL")},
+    )
     summary = {
         "run_id": run_id,
         "challenge_id": args.challenge_id,

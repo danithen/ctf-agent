@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -163,7 +164,44 @@ def _run_tool(ws: Workspace, name: str, args: dict[str, Any], max_chars: int) ->
     raise ToolError(f"unknown tool {name}")
 
 
-def run_agent(target: Target, workspace: Path, limits: Limits, trace_path: Path) -> Result:
+def _ls_attach(metadata: dict[str, Any] | None) -> None:
+    """Stamp metadata/tags onto the current LangSmith root run (best-effort)."""
+    if not metadata:
+        return
+    try:
+        from langsmith.run_helpers import get_current_run_tree
+        rt = get_current_run_tree()
+        if rt is None:  # tracing disabled (tests) — nothing to attach
+            return
+        rt.metadata.update(dict(metadata))
+        tags = [str(v) for k, v in metadata.items()
+                if k in {"challenge", "trial"} and v is not None]
+        if tags:
+            rt.tags = sorted({*(rt.tags or []), *tags})
+        # Prefer run_id as the display name (it embeds the challenge id);
+        # fall back to trial/challenge for callers that don't pass run_id.
+        rt.name = str(metadata.get("run_id") or metadata.get("challenge")
+                      or "run_agent")
+    except Exception as exc:  # noqa: BLE001  (tracing must never break an agent run)
+        logging.getLogger(__name__).debug("LangSmith attach skipped: %s", exc)
+
+
+@traceable(name="run_agent", run_type="chain")
+def run_agent(
+    target: Target,
+    workspace: Path,
+    limits: Limits,
+    trace_path: Path,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> Result:
+    """One agent attempt.
+
+    ``metadata`` (challenge id, run id, trial, model…) is written as the first
+    trace event, stamped onto the LangSmith root run, and used to derive the
+    LangSmith tags (challenge + attempt) so traces are filterable per challenge.
+    """
+    _ls_attach(metadata)
     ws = Workspace(workspace, timeout_s=limits.tool_timeout_s, output_chars=limits.tool_output_chars)
     description = (workspace / "description.txt").read_text()
     messages: list[dict[str, Any]] = [
@@ -184,6 +222,8 @@ def run_agent(target: Target, workspace: Path, limits: Limits, trace_path: Path)
         events.append(rec)
         fh.write(json.dumps(rec, default=str) + "\n")
         fh.flush()
+
+    log("meta", **(metadata or {}))   # first line: lets any consumer identify the run
 
     status = "step_limit"
     verified = False
@@ -310,6 +350,9 @@ def run_agent(target: Target, workspace: Path, limits: Limits, trace_path: Path)
         else:
             status = "step_limit"
     finally:
+        # Terminal record so the raw trace always states the outcome — the
+        # runtime badge and the trace can be reconciled without opening code.
+        log("done", status=status, verified=verified, steps=steps)
         fh.close()
 
     try:

@@ -143,3 +143,57 @@ def test_elision_stubs_old_outputs_and_allows_replay(tmp_path: Path, fake_chat):
     assert any("M0" in res and not res.startswith("error:") for res in results)
     assert sum(1 for ev in r.events
                if ev["kind"] == "tool" and (ev.get("result") or "").startswith("error:")) == 0
+
+
+# ---------------------------------------------------------------------------
+#  Trace metadata: meta header + done footer (runtime badge ⇄ trace reconciled)
+# ---------------------------------------------------------------------------
+def test_trace_recording_meta_and_done(tmp_path: Path, fake_chat):
+    ws = tmp_path / "ws"
+    write_description(ws)
+    fake_chat([
+        {"assistant": {"role": "assistant", "content": None,
+                       "tool_calls": [tool_call(1, "submit_flag",
+                                                '{"flag": "flag{abc}"}')]}},
+    ])
+    res = run_agent(make_target(), ws, basic_limits(10), tmp_path / "trace.jsonl",
+                    metadata={"challenge": "rev-x", "run_id": "rev-x-test-t1",
+                              "trial": 1, "max_attempts": 3, "model": "fake"})
+    assert res.verified and res.status == "solved"
+    lines = [json.loads(l) for l in (tmp_path / "trace.jsonl").read_text().splitlines() if l]
+    assert lines[0]["kind"] == "meta"
+    assert lines[0]["challenge"] == "rev-x" and lines[0]["trial"] == 1
+    assert lines[0]["run_id"] == "rev-x-test-t1" and lines[0]["model"] == "fake"
+    assert lines[-1]["kind"] == "done"
+    assert lines[-1]["status"] == "solved" and lines[-1]["verified"] is True
+    assert lines[-1]["steps"] == res.steps
+
+
+def test_trace_done_footer_reports_unsolved_status(tmp_path: Path, fake_chat):
+    ws = tmp_path / "ws"
+    write_description(ws)
+    fake_chat([                       # prose only → nudges exhausted → no_flag
+        {"assistant": {"role": "assistant", "content": "hmm", "tool_calls": []}},
+        {"assistant": {"role": "assistant", "content": "hmm again", "tool_calls": []}},
+        {"assistant": {"role": "assistant", "content": "still thinking", "tool_calls": []}},
+    ])
+    res = run_agent(make_target(), ws, basic_limits(10), tmp_path / "trace.jsonl",)
+    assert res.status == "no_flag" and not res.verified
+    lines = [json.loads(l) for l in (tmp_path / "trace.jsonl").read_text().splitlines() if l]
+    assert lines[-1]["kind"] == "done"
+    assert lines[-1]["status"] == "no_flag" and lines[-1]["verified"] is False
+
+
+def test_tracing_disabled_uses_no_run_tree(tmp_path: Path, fake_chat, monkeypatch):
+    """With LANGSMITH_TRACING=false (conftest), _ls_attach must be a no-op."""
+    ws = tmp_path / "ws"
+    write_description(ws)
+    fake_chat([
+        {"assistant": {"role": "assistant", "content": None,
+                       "tool_calls": [tool_call(1, "submit_flag",
+                                                '{"flag": "flag{abc}"}')]}},
+    ])
+    # should neither raise nor attach anything
+    res = run_agent(make_target(), ws, basic_limits(10), tmp_path / "trace.jsonl",
+                    metadata={"challenge": "rev-x", "trial": 2})
+    assert res.verified

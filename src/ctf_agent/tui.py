@@ -532,7 +532,11 @@ class CtfTui(App):
         t = threading.Thread(target=tail, daemon=True)
         t.start()
         try:
-            result = run_agent(target, workspace, limits, trace)
+            result = run_agent(
+                target, workspace, limits, trace,
+                metadata={"challenge": cid, "run_id": run_dir.name,
+                          "trial": trial, "model": os.environ.get("CTF_MODEL")},
+            )
             verdict = "SOLVED" if result.verified else result.status
             is_solved = result.verified
         except Exception as e:  # noqa: BLE001

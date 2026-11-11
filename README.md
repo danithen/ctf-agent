@@ -18,7 +18,11 @@ automatic context elision near the token budget, nudge-not-kill handling of
 prose-only replies, budget-aware coaching near the step limit. All tool
 execution goes through `tools/sandbox.py` (workspace-confined, empty env, hard
 timeouts, truncated output). Every model/tool call is traced to a local
-`trace.jsonl` and LangSmith. `ctf_agent.metrics` / `aggregate` compute pass@k,
+`trace.jsonl` and LangSmith. Traces carry a `meta` first line (challenge,
+run_id, trial, model) and a `done` last line (status, verified, steps); the
+LangSmith root run takes the same metadata plus `[challenge, attempt]` tags,
+so traces are filterable per challenge.
+`ctf_agent.metrics` / `aggregate` compute pass@k,
 token, cost, and status summaries from `attempts.jsonl`. `ctf_agent.flask_gui`
 provides a web UI (challenge selection / live runtime feed / report) and
 `ctf_agent.batch` runs the scored set headlessly.

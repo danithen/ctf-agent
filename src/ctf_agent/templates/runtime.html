@@ -50,6 +50,20 @@
   }
 
   function eventHTML(ev) {
+    if (ev.kind === 'meta') {
+      const bits = [];
+      if (ev.challenge) bits.push(`<span class="mono" style="font-weight:600;">${esc(ev.challenge)}</span>`);
+      if (ev.model) bits.push(`<span class="muted">model ${esc(ev.model)}</span>`);
+      if (ev.trial != null) bits.push(`<span class="muted">attempt ${ev.trial}${ev.max_attempts ? '/' + ev.max_attempts : ''}</span>`);
+      return `<div class="ev" style="border-left:2px solid var(--accent); padding:6px 12px;"><div class="ev-head"><span class="ev-kind">meta</span>${bits.join('')}<span class="t">t=${ev.t}s</span></div></div>`;
+    }
+    if (ev.kind === 'done') {
+      const pill = ev.verified
+        ? '<span class="pill-ok">✓ outcome: solved</span>'
+        : `<span class="pill-err">✗ outcome: ${esc(ev.status || 'failed')}</span>`;
+      const st = ev.steps != null ? `<span class="muted">${ev.steps} steps</span>` : '';
+      return `<div class="ev" style="border-left:2px solid var(--border); padding:6px 12px;"><div class="ev-head"><span class="ev-kind">done</span>${pill}${st}<span class="t">t=${ev.t}s</span></div></div>`;
+    }
     if (ev.kind === 'model') {
       let html = `<div class="ev model">`;
       html += `<div class="ev-head"><span class="ev-kind">model</span>`;

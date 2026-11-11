@@ -1,5 +1,25 @@
 {# One trace event, server-rendered (mirrors the JS renderer in runtime.js-ish logic) #}
-{% if ev.kind == 'model' %}
+{% if ev.kind == 'meta' %}
+<div class="ev" style="border-left:2px solid var(--accent); padding:6px 12px;">
+  <div class="ev-head">
+    <span class="ev-kind">meta</span>
+    {% if ev.challenge %}<span class="mono">{{ ev.challenge }}</span>{% endif %}
+    {% if ev.model %}<span class="muted">model&nbsp;{{ ev.model }}</span>{% endif %}
+    {% if ev.trial %}<span class="muted">attempt&nbsp;{{ ev.trial }}{% if ev.max_attempts %}/{{ ev.max_attempts }}{% endif %}</span>{% endif %}
+    <span class="t">t={{ ev.t }}s</span>
+  </div>
+</div>
+{% elif ev.kind == 'done' %}
+<div class="ev" style="border-left:2px solid var(--border); padding:6px 12px;">
+  <div class="ev-head">
+    <span class="ev-kind">done</span>
+    {% if ev.verified %}<span class="pill-ok">✓ outcome: solved</span>
+    {% else %}<span class="pill-err">✗ outcome: {{ ev.status or 'failed' }}</span>{% endif %}
+    {% if ev.steps %}<span class="muted">{{ ev.steps }} steps</span>{% endif %}
+    <span class="t">t={{ ev.t }}s</span>
+  </div>
+</div>
+{% elif ev.kind == 'model' %}
 <div class="ev model">
   <div class="ev-head">
     <span class="ev-kind">model</span>

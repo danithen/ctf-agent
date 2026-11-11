@@ -287,20 +287,32 @@ def test_retry_runs_until_solved(env, env_guard, monkeypatch):
     """Two failures, then success: three real attempts recorded, last solved."""
     results = [_dummy_run(False, "no_flag"), _dummy_run(False, "token_budget"),
                _dummy_run(True, "solved")]
-    monkeypatch.setattr(flask_gui, "run_agent", lambda *a, **k: results.pop(0))
+    got_meta: list[dict] = []
+
+    def ra(target, workspace, limits, trace, *, metadata=None):
+        got_meta.append(metadata)
+        return results.pop(0)
+
+    monkeypatch.setattr(flask_gui, "run_agent", ra)
     monkeypatch.setenv("CTF_MAX_RETRIES", "2")
     flask_gui.JOBS.clear()
     flask_gui.SESSION_ATTEMPTS.clear()
     app.test_client().post("/run/start", data={"challenge_ids": ["rev-x"]})
     _drain()
     order = ["rev-x-test-t1", "rev-x-test-t2", "rev-x-test-t3"]
-    assert [flask_gui.JOBS[i].verdict for i in order] == ["no_flag", "token_budget", "SOLVED"]
+    assert [flask_gui.JOBS[i].verdict for i in order] == ["no_flag", "token_budget", "solved"]
     assert [flask_gui.JOBS[i].solved for i in order] == [False, False, True]
     rows = (flask_gui.RESULTS_ROOT / "attempts.jsonl").read_text().splitlines()
     recs = [json.loads(r) for r in rows if r.strip()]
     assert [r["trial"] for r in recs] == [1, 2, 3]
     assert [r["verified"] for r in recs] == [False, False, True]
     assert len(flask_gui.SESSION_ATTEMPTS) == 3
+    # metadata flows to the agent (challenge/run_id/trial/tags), attempt-indexed
+    assert len(got_meta) == 3
+    assert [m["trial"] for m in got_meta] == [1, 2, 3]
+    assert all(m["challenge"] == "rev-x" for m in got_meta)
+    assert got_meta[2]["run_id"] == "rev-x-test-t3"
+    assert [m["max_attempts"] for m in got_meta] == [3, 3, 3]
 
 
 def test_retry_skips_remaining_after_success(env, env_guard, monkeypatch):
@@ -347,3 +359,23 @@ def test_config_retries_field(env, env_guard, monkeypatch):
     assert "must be 0 or a positive integer" in html
     client.post("/config", data={"retries": "3", "remember": "on"})
     assert "CTF_MAX_RETRIES=3" in flask_gui.DOTENV_PATH.read_text()
+
+
+# ---------------------------------------------------------------------------
+#  Trace metadata events (meta header / done footer) flow to the runtime feed
+# ---------------------------------------------------------------------------
+def test_job_payload_includes_meta_and_done_events(env, env_guard):
+    job = flask_gui.Job(cid="rev-x", run_id="rev-x-test-t1",
+                        run_dir=flask_gui.RUNS_ROOT / "rev-x-test-t1")
+    with flask_gui._lock:
+        job.events = [
+            {"kind": "meta", "t": 0, "challenge": "rev-x", "run_id": "rev-x-test-t1",
+             "trial": 1, "max_attempts": 3, "model": "fake"},
+            {"kind": "done", "t": 12.5, "status": "solved", "verified": True, "steps": 7},
+        ]
+    evs = flask_gui._job_payload(job)["events"]
+    meta, done = evs[0], evs[-1]
+    assert meta["kind"] == "meta" and meta["challenge"] == "rev-x"
+    assert meta["trial"] == 1 and meta["max_attempts"] == 3 and meta["model"] == "fake"
+    assert done["kind"] == "done" and done["status"] == "solved"
+    assert done["verified"] is True and done["steps"] == 7

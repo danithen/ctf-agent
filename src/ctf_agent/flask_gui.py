@@ -340,9 +340,19 @@ def _execute(job: Job) -> None:
     try:
         target = load_target(dataset, job.cid)
         workspace = stage_workspace(target, run_dir / "workspace")
-        result = run_agent(target, workspace, make_limits(), trace)
+        result = run_agent(
+            target, workspace, make_limits(), trace,
+            metadata={
+                "challenge": job.cid,
+                "run_id": job.run_id,
+                "trial": job.attempt,
+                "max_attempts": job.max_attempts,
+                "model": os.environ.get("CTF_MODEL"),
+            },
+        )
         job.solved = bool(result.verified)
-        job.verdict = "SOLVED" if result.verified else (result.status or "no_flag")
+        # lowercase to match Result.status ("solved") 1:1 — the UI uppercases
+        job.verdict = "solved" if result.verified else (result.status or "no_flag")
     except Exception as e:  # noqa: BLE001
         job.solved = False
         job.verdict = f"error: {type(e).__name__}: {e}"
@@ -467,6 +477,24 @@ def _job_payload(db: Job) -> dict[str, Any]:
                 "kind": "submission",
                 "t": ev.get("t"),
                 "verified": bool(ev.get("verified")),
+            })
+        elif ev.get("kind") == "meta":
+            out_events.append({
+                "kind": "meta",
+                "t": ev.get("t"),
+                "challenge": ev.get("challenge"),
+                "run_id": ev.get("run_id"),
+                "trial": ev.get("trial"),
+                "max_attempts": ev.get("max_attempts"),
+                "model": ev.get("model"),
+            })
+        elif ev.get("kind") == "done":
+            out_events.append({
+                "kind": "done",
+                "t": ev.get("t"),
+                "status": ev.get("status"),
+                "verified": bool(ev.get("verified")),
+                "steps": ev.get("steps"),
             })
         else:
             out_events.append({"kind": str(ev.get("kind", "?")), "t": ev.get("t"),
