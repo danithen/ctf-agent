@@ -100,13 +100,7 @@ To test the hypothesis that reverse-engineering challenges are bound by context 
 
 ---
 
-## 5. Personnel Contributions
-
-| Member | Contributions |
-|--------|---------------|
-| Daniel Thend | Architecture & agent loop design; sandbox and workspace confinement; pilot/ablation methodology; LangChain/LiteLLM integration; Flask GUI; metrics/aggregate; testing suite; report drafting. |
-
-## 6. Disclosure of Reused Code and AI Assistance
+## 5. Disclosure of Reused Code and AI Assistance
 
 **Third-Party Components:**
 *   **CTFTiny Benchmark:** (GPL-2.0) Used unmodified for challenge data and verification.
