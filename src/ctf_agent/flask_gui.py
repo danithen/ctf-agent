@@ -139,26 +139,32 @@ def _mask_key(key: str | None) -> str:
     return f"…{key[-4:]}" if len(key) > 8 else "(set, very short)"
 
 
-def _probe_gateway(base: str | None, token: str | None) -> tuple[bool, str]:
-    """GET {base}/v1/models — verifies URL+key without spending model tokens."""
+def _fetch_models(base: str | None, token: str | None) -> tuple[list[str] | None, str]:
+    """GET {base}/v1/models — returns (model_ids, "") or (None, error_note)."""
     if not base or not token:
-        return False, "Base URL or API key not set."
+        return None, "Base URL or API key not set."
     url = base.rstrip("/") + "/v1/models"
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-        ids = [m.get("id", "") for m in data.get("data", [])]
-        model = os.environ.get("CTF_MODEL", "")
-        listed = model in ids if model else None
-        note = f"{len(ids)} models listed"
-        if listed is False:
-            note += f" — note: current model '{model}' not in the list"
-        return True, note
+        return sorted(m.get("id", "") for m in data.get("data", [])), ""
     except urllib.error.HTTPError as e:
-        return False, f"HTTP {e.code} from {url} — check the API key."
+        return None, f"HTTP {e.code} from {url} — check the API key."
     except Exception as e:  # noqa: BLE001
-        return False, f"Cannot reach {url}: {type(e).__name__}."
+        return None, f"Cannot reach {url}: {type(e).__name__}."
+
+
+def _probe_gateway(base: str | None, token: str | None) -> tuple[bool, str]:
+    """Verify URL+key without spending model tokens (used by “Test connection”)."""
+    ids, err = _fetch_models(base, token)
+    if ids is None:
+        return False, err
+    model = os.environ.get("CTF_MODEL", "")
+    note = f"{len(ids)} models listed"
+    if model and model not in ids:
+        note += f" — note: current model '{model}' not in the list"
+    return True, note
 
 
 @app.route("/config", methods=["GET", "POST"])
@@ -219,6 +225,8 @@ def config():
         base_url=os.environ.get("LITELLM_BASE_URL", ""),
         model=os.environ.get("CTF_MODEL", ""),
         key_mask=_mask_key(os.environ.get("LITELLM_TOKEN")),
+        models=(_fetch_models(os.environ.get("LITELLM_BASE_URL"),
+                              os.environ.get("LITELLM_TOKEN"))[0]),
         limits={
             "max_steps": os.environ.get("CTF_MAX_STEPS", ""),
             "max_minutes": os.environ.get("CTF_MAX_MINUTES", ""),

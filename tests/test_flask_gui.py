@@ -218,3 +218,30 @@ def test_config_test_connection(env, env_guard, monkeypatch):
     monkeypatch.setattr(flask_gui, "_probe_gateway", lambda b, t: (True, "23 models listed"))
     html = app.test_client().post("/config/test", follow_redirects=True).get_data(as_text=True)
     assert "Gateway reachable" in html and "23 models listed" in html
+
+
+def test_config_model_dropdown_lists_gateway_models(env, env_guard, monkeypatch):
+    monkeypatch.setenv("CTF_MODEL", "gpt-oss:120b")
+    monkeypatch.setattr(flask_gui, "_fetch_models",
+                        lambda b, t: (["glm-5.3", "gpt-oss:120b", "kimi-k2.7-code"], ""))
+    html = app.test_client().get("/config").get_data(as_text=True)
+    assert "<select" in html and 'name="model"' in html
+    assert '<option value="gpt-oss:120b" selected>' in html
+    assert 'value="kimi-k2.7-code"' in html
+    assert "not in catalog" not in html
+
+
+def test_config_model_dropdown_marks_uncatalogued_current(env, env_guard, monkeypatch):
+    monkeypatch.setenv("CTF_MODEL", "my-local-model")
+    monkeypatch.setattr(flask_gui, "_fetch_models",
+                        lambda b, t: (["gpt-oss:120b", "kimi-k2.7-code"], ""))
+    html = app.test_client().get("/config").get_data(as_text=True)
+    assert 'value="my-local-model" selected>' in html and "not in catalog" in html
+
+
+def test_config_model_falls_back_to_text_input(env, env_guard, monkeypatch):
+    monkeypatch.setenv("CTF_MODEL", "fallback-model")
+    monkeypatch.setattr(flask_gui, "_fetch_models", lambda b, t: (None, "offline"))
+    html = app.test_client().get("/config").get_data(as_text=True)
+    assert "<select" not in html
+    assert 'name="model"' in html and 'value="fallback-model"' in html

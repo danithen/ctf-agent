@@ -17,8 +17,18 @@
       </label>
       <label style="display:grid; gap:4px;">
         <span class="muted">Model ID</span>
+        {% if models %}
+        <select class="input mono" name="model">
+          {% if model and model not in models %}
+            <option value="{{ model }}" selected>{{ model }} (current, not in catalog)</option>
+          {% endif %}
+          {% for m in models %}
+            <option value="{{ m }}" {{ 'selected' if m == model }}>{{ m }}</option>
+          {% endfor %}
+        </select>
+        {% else %}
         <input class="input mono" type="text" name="model" value="{{ model }}"
-               placeholder="gpt-oss:120b">
+               placeholder="gpt-oss:120b">{% endif %}
       </label>
     </div>
 
@@ -76,6 +86,8 @@
     <p class="muted" style="margin:0; font-size:0.85em;">
       “Test connection” lists models on the gateway without spending tokens — use it after
       changing the key, URL, or model. The API key is never displayed; only its last 4 chars.
+      The model dropdown is populated live from the gateway; it falls back to a text box
+      when the gateway is unreachable, so the GUI still works offline.
     </p>
   </form>
 </div>
