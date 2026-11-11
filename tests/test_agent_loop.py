@@ -58,6 +58,20 @@ def fake_chat(monkeypatch):
     return install
 
 
+@pytest.fixture
+def fake_chat_spy(monkeypatch):
+    """install(...) → (ScriptedChat, ...) with the whole message history per call.
+
+    Only used by the evaluator-loop tests that assert on injected prompts."""
+    holder: dict = {}
+    def install(responses, in_tokens=500):
+        sc = ScriptedChat(responses, in_tokens=in_tokens)
+        holder.clear(); holder.update(fake=sc, seen=sc.seen)
+        monkeypatch.setattr(agent_mod, "chat", sc)
+        return sc
+    return holder
+
+
 def write_description(ws: Path, text: str = "Find the flag.") -> None:
     ws.mkdir(parents=True, exist_ok=True)
     (ws / "description.txt").write_text(text)
@@ -197,3 +211,73 @@ def test_tracing_disabled_uses_no_run_tree(tmp_path: Path, fake_chat, monkeypatc
     res = run_agent(make_target(), ws, basic_limits(10), tmp_path / "trace.jsonl",
                     metadata={"challenge": "rev-x", "trial": 2})
     assert res.verified
+# ---------------------------------------------------------------------------
+#  Evaluator feedback loop: submission rejection with cap + halfway checkpoint
+# ---------------------------------------------------------------------------
+def test_wrong_submission_gives_feedback_and_continues(tmp_path: Path, fake_chat):
+    """A rejected flag returns an evaluator-grade observation and the run
+    continues — a better candidate can still land."""
+    ws = tmp_path / "ws"
+    write_description(ws)
+    sc = fake_chat([
+        {"assistant": {"role": "assistant", "content": None,
+                       "tool_calls": [tool_call(1, "submit_flag", '{"flag": "flag{nope}"}')]}},
+        {"assistant": {"role": "assistant", "content": None,
+                       "tool_calls": [tool_call(2, "submit_flag", '{"flag": "flag{abc}"}')]}},
+    ])
+    res = run_agent(make_target(), ws, basic_limits(10), tmp_path / "trace.jsonl")
+    assert res.verified and res.submissions == 2
+    rej = next(m for m in sc.seen[-1] if isinstance(m, dict)
+               and m.get("role") == "tool" and "INCORRECT" in str(m.get("content")))
+    assert "flag{nope}" in rej["content"] and "1 of 3" in rej["content"]
+
+
+def test_submission_cap_ends_run(tmp_path: Path, fake_chat):
+    """After max_submits wrong guesses the run terminates (no guess-spam)."""
+    ws = tmp_path / "ws"
+    write_description(ws)
+    calls = [tool_call(i + 1, "submit_flag", f'{{"flag": "flag{{wrong{i}}}"}}')
+             for i in range(3)]
+    fake_chat([
+        {"assistant": {"role": "assistant", "content": None, "tool_calls": [c]}}
+        for c in calls
+    ])
+    res = run_agent(make_target(), ws, basic_limits(10), tmp_path / "trace.jsonl")
+    assert res.status == "no_flag" and not res.verified and res.submissions == 3
+    lines = [json.loads(l) for l in (tmp_path / "trace.jsonl").read_text().splitlines() if l]
+    done = [e for e in lines if e.get("kind") == "done"][-1]
+    assert done["submits"] == 3
+
+
+def test_evaluator_checkpoint_fires_at_half_budget(tmp_path: Path, fake_chat):
+    """Halfway with nothing submitted → deterministic consolidation nudge."""
+    ws = tmp_path / "ws"
+    write_description(ws)
+    sc = fake_chat([
+        {"assistant": {"role": "assistant", "content": None,
+                       "tool_calls": [tool_call(1, "list_files", '{}')]}},
+        {"assistant": {"role": "assistant", "content": None,
+                       "tool_calls": [tool_call(2, "submit_flag", '{"flag": "flag{abc}"}')]}},
+    ])
+    res = run_agent(make_target(), ws, basic_limits(2), tmp_path / "trace.jsonl")
+    assert res.verified
+    assert any(isinstance(m, dict) and m.get("role") == "user"
+               and "Evaluator checkpoint" in str(m.get("content"))
+               for m in sc.seen[-1])
+
+
+def test_feedback_preamble_injected(tmp_path: Path, fake_chat):
+    """run_agent(feedback=…) surfaces the evaluator note before the first turn."""
+    ws = tmp_path / "ws"
+    write_description(ws)
+    sc = fake_chat([
+        {"assistant": {"role": "assistant", "content": None,
+                       "tool_calls": [tool_call(1, "submit_flag", '{"flag": "flag{abc}"}')]}},
+    ])
+    res = run_agent(make_target(), ws, basic_limits(10), tmp_path / "trace.jsonl",
+                    feedback="Previous attempt: ended with step_limit; it never submitted.")
+    assert res.verified
+    assert any("Previous attempt: ended with step_limit" in str(m.get("content"))
+               for m in sc.seen[-1])
+    lines = [json.loads(l) for l in (tmp_path / "trace.jsonl").read_text().splitlines() if l]
+    assert any(e.get("kind") == "feedback" for e in lines)

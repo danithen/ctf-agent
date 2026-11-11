@@ -65,11 +65,30 @@ uv run ctf-flask-gui                       # http://127.0.0.1:5000
 
 The **Config** tab updates the model ID (dropdown from the gateway catalog when
 reachable, text box otherwise), API key, gateway URL, and all run limits — including
-**retries per challenge** (a *model failure* — no/wrong flag, budget/step/timeout
-verdict — re-runs on a clean slate up to _N_ extra times; all attempts are recorded,
-the rest are skipped once one solves, and infrastructure errors stop the chain) — for
+**retries per challenge** (see the evaluator loop below), **flags-in-run cap**
+(`CTF_MAX_SUBMITS`, default 3) and an **on/off switch for retry handoff notes** — for
 the current session (optionally persisted to `.env`); “Test connection” verifies the
 gateway without spending tokens.
+
+### Evaluator loop
+
+The agent loop ships two deterministic evaluator mechanisms (no extra model calls,
+zero tokens):
+
+- **In-run feedback.** A rejected flag returns `INCORRECT (k of N)` with the rejected
+  candidate echoed back, so the model can correct course within the run. Submissions
+  are capped (`CTF_MAX_SUBMITS`, default 3); busting the cap ends the run as `no_flag`
+  instead of letting it guess forever. A halfway checkpoint fires once at 50 % of the
+  step budget if nothing has been submitted, nudging the agent to consolidate what it
+  knows and try a flag.
+- **Between-attempt handoff (GUI retry chains only).** When a retry runs after a model
+  failure, a deterministic note is distilled from the failed attempt’s trace — outcome,
+  step/tool mix, repeated and errored tool calls, every rejected flag (“do not
+  resubmit”) and where it left off — and injected before the next attempt’s first turn.
+  It never contains the flag and costs no tokens to produce; disable with
+  `CTF_FEEDBACK_NOTE=off`. Batch/scored runs deliberately do **not** use handoff notes:
+  their retries stay clean-slate so pass@k measurements stay honest. (If you enable
+  notes for scored runs, label the results as a different ablation.)
 
 Metrics from run artifacts:
 

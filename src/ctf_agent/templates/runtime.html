@@ -136,7 +136,9 @@
       const txt = ok ? 'SOLVED'
         : skip ? 'skipped — solved in an earlier attempt'
         : esc(job.verdict || 'FAILED');
-      v.innerHTML = `<span class="badge ${ok ? 'ok' : (skip ? 'warn' : 'err')}">${txt}</span>`;
+      v.innerHTML = `<span class="badge ${ok ? 'ok' : (skip ? 'warn' : 'err')}">${txt}</span>`
+        + (job.submissions != null ? ` <span class="badge">${job.submissions} sub${job.submissions == 1 ? '' : 's'}</span>` : '')
+        + (job.feedback ? ` <span class="badge accent" title="started with an evaluator handoff from the previous attempt">note ✓</span>` : '');
     }
   }
 

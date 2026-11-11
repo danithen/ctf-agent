@@ -16,6 +16,7 @@
     {% if ev.verified %}<span class="pill-ok">✓ outcome: solved</span>
     {% else %}<span class="pill-err">✗ outcome: {{ ev.status or 'failed' }}</span>{% endif %}
     {% if ev.steps %}<span class="muted">{{ ev.steps }} steps</span>{% endif %}
+    {% if ev.submits != null %}<span class="muted">{{ ev.submits }} submission{{ 's' if ev.submits != 1 }}</span>{% endif %}
     <span class="t">t={{ ev.t }}s</span>
   </div>
 </div>

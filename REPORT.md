@@ -26,8 +26,10 @@ scaffolding around it:
   output truncation), `write_file`, and `submit_flag`.
 - **Budget & recovery machinery** — cumulative 150k-token cap with *automatic context
   elision* (stale tool outputs become one-shot replayable stubs), a *nudge-not-kill*
-  path for prose-only replies, a repeat-call guard, and budget-aware coaching messages
-  in the final steps.
+  path for prose-only replies, a repeat-call guard, a *deterministic evaluator loop*
+  (rejection feedback with a flags-in-run cap, a halfway consolidation checkpoint, and
+  between-retry handoff notes distilled from the failed attempt's trace), and
+  budget-aware coaching messages in the final steps.
 - **Observability & reporting** — every model/tool call is appended to a local
   `trace.jsonl` (also mirrored to LangSmith); `metrics.py`/`aggregate.py` compute
   status/verdict, steps, tokens, cost, and unbiased-ish pass@k; `flask_gui.py` provides
@@ -62,6 +64,13 @@ scaffolding around it:
 6. **Tooling friction.** `grep`/`find` sandbox helpers, TUI dependency fragility
    (replaced by the Flask GUI), duplicate Flask endpoint registration, and port
    conflicts — all documented and fixed; nothing affected the agent's correctness.
+7. **No evaluator channel — retries repeat failure.** Trace forensics on the scored
+   runs showed 7 of 11 attempts dying on `step_limit`/`token_budget` **without ever
+   submitting**, and retry chains nearly repeating trajectories (rev-baby-mult t2/t3:
+   60/57 steps with four identical wrong flags in one run). A rejected flag returned a
+   bare `"INCORRECT"` and the next retry started from a clean slate with zero
+   information about what the previous attempt tried — the model had no way to know it
+   was stuck, and we had no way to tell it.
 
 ## 3. Changes tested
 
@@ -78,6 +87,7 @@ Each change was piloted on 1 trial of one challenge before being kept or rejecte
 | V5 | Context elision + one-shot replay | rev-tablez | token_budget (elision triggers late; see below) | kept |
 | V6 | Nudge-not-kill (≤2 prose replies) | rev-baby-mult | no_flag but with attempts made | kept |
 | V7 | Toolkit-facts prompt (verified sandbox semantics, notes-file habit, early submission) | — | pending pilot | — |
+| V8 | Deterministic evaluator loop: rich `INCORRECT (k/N)` rejections, submission cap (3), halfway consolidation checkpoint, and between-retry handoff notes distilled from the failed attempt's trace | rev-baby-mult (handoff previewed on real failed traces) | covered by scripted-fake tests; live ablation pending | kept (defaults on; scored runs stay clean-slate) |
 
 Key insight from V1–V4: prompt changes *shift behavior* (objdump usage went from ~0 to
 7/11 scripts) but do not by themselves recover flags; the binding constraint for

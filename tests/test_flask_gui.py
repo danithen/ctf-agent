@@ -26,6 +26,7 @@ class DummyResult:
         self.steps = 2
         self.input_tokens = 100
         self.output_tokens = 10
+        self.submissions = 1
         self.model_calls = 1
         self.tool_calls = 1
         self.estimated_cost_usd = 0.0001
@@ -250,7 +251,7 @@ def test_config_model_falls_back_to_text_input(env, env_guard, monkeypatch):
     monkeypatch.setenv("CTF_MODEL", "fallback-model")
     monkeypatch.setattr(flask_gui, "_fetch_models", lambda b, t: (None, "offline"))
     html = app.test_client().get("/config").get_data(as_text=True)
-    assert "<select" not in html
+    assert '<select class="input mono" name="model">' not in html   # offline fallback
     assert 'name="model"' in html and 'value="fallback-model"' in html
 
 
@@ -294,9 +295,11 @@ def test_retry_runs_until_solved(env, env_guard, monkeypatch):
     results = [_dummy_run(False, "no_flag"), _dummy_run(False, "token_budget"),
                _dummy_run(True, "solved")]
     got_meta: list[dict] = []
+    got_feedback: list = []
 
-    def ra(target, workspace, limits, trace, *, metadata=None):
+    def ra(target, workspace, limits, trace, *, metadata=None, feedback=None):
         got_meta.append(metadata)
+        got_feedback.append(feedback)
         return results.pop(0)
 
     monkeypatch.setattr(flask_gui, "run_agent", ra)
@@ -423,3 +426,91 @@ def test_model_failure_verdicts_still_retry(env, env_guard, monkeypatch):
     assert [flask_gui.JOBS[i].verdict
             for i in ("rev-x-test-t1", "rev-x-test-t2")] == ["token_budget", "solved"]
     assert len(flask_gui.JOBS) == 2                 # t2 ran, nothing skipped/cancelled
+
+
+def test_dummy_run_rejects_no_flag_with_submissions(env, env_guard):
+    """DummyResult must carry the new Result fields the row writer reads."""
+    assert _dummy_run(False, "no_flag").submissions == 1
+
+
+ENV_KEYS.append("CTF_MAX_SUBMITS")
+ENV_KEYS.append("CTF_FEEDBACK_NOTE")
+
+
+def test_make_limits_reads_ctf_max_submits(env, env_guard, monkeypatch):
+    monkeypatch.delenv("CTF_MAX_SUBMITS", raising=False)
+    assert flask_gui.make_limits().max_submits == 3          # default
+    monkeypatch.setenv("CTF_MAX_SUBMITS", "5")
+    assert flask_gui.make_limits().max_submits == 5
+
+
+def test_build_handoff_from_trace(tmp_path: Path):
+    from ctf_agent.feedback import build_handoff
+    trace = tmp_path / "trace.jsonl"
+    trace.write_text("\n".join([
+        json.dumps({"kind": "meta", "challenge": "rev-x", "trial": 1}),
+        json.dumps({"kind": "tool", "name": "run_command", "result": "objdump ok"}),
+        json.dumps({"kind": "tool", "name": "run_command", "result": "objdump ok"}),
+        json.dumps({"kind": "tool", "name": "run_python", "result": "error: boom"}),
+        json.dumps({"kind": "submission", "verified": False, "candidate": "flag{guess1}"}),
+        json.dumps({"kind": "submission", "verified": False, "candidate": "flag{guess2}"}),
+        json.dumps({"kind": "done", "status": "token_budget", "verified": False,
+                    "steps": 41, "submits": 2}),
+    ]) + "\n")
+    note = build_handoff(trace, trial=1)
+    assert note and "token_budget" in note and "41 steps" in note
+    assert "flag{guess1}" in note and "REJECTED" in note
+    assert "repeated" in note and "errored" in note
+    # unreadable trace → no note (never breaks the next attempt)
+    assert build_handoff(tmp_path / "missing.jsonl") is None
+
+
+def test_retry_injects_handoff_note(env, env_guard, monkeypatch):
+    """t1 fails → t2 receives the deterministic evaluator note; payload says so."""
+    seen_feedback: list = []
+
+    def ra(target, workspace, limits, trace, *, metadata=None, feedback=None):
+        seen_feedback.append(feedback)
+        # the fake must leave a trace so the handoff builder has something to read
+        trace.parent.mkdir(parents=True, exist_ok=True)
+        trace.write_text(json.dumps({"kind": "done", "status": "no_flag",
+                                     "verified": False, "steps": 9, "submits": 1}) + "\n")
+        return _dummy_run(False, "no_flag")
+
+    monkeypatch.setattr(flask_gui, "run_agent", ra)
+    monkeypatch.setenv("CTF_MAX_RETRIES", "1")
+    flask_gui.JOBS.clear()
+    flask_gui.SESSION_ATTEMPTS.clear()
+    app.test_client().post("/run/start", data={"challenge_ids": ["rev-x"]})
+    _drain()
+    assert seen_feedback[0] is None                          # t1: no handoff
+    assert seen_feedback[1] and "Previous attempt" in seen_feedback[1]
+    payload = app.test_client().get(
+        f"/api/jobs?ids={flask_gui.JOBS['rev-x-test-t2'].run_id}").get_json()["jobs"][0]
+    assert payload["feedback"] is True
+
+
+def test_handoff_disabled_by_env(env, env_guard, monkeypatch):
+    monkeypatch.setattr(flask_gui, "run_agent",
+                        lambda *a, **k: _dummy_run(False, "no_flag"))
+    monkeypatch.setenv("CTF_MAX_RETRIES", "1")
+    monkeypatch.setenv("CTF_FEEDBACK_NOTE", "off")
+    flask_gui.JOBS.clear()
+    flask_gui.SESSION_ATTEMPTS.clear()
+    app.test_client().post("/run/start", data={"challenge_ids": ["rev-x"]})
+    _drain()
+    rows = [json.loads(l) for l in
+            (flask_gui.RESULTS_ROOT / "attempts.jsonl").read_text().splitlines() if l]
+    assert all(r.get("feedback") is False for r in rows)
+
+
+def test_config_submissions_and_feedback_fields(env, env_guard):
+    client = app.test_client()
+    resp = client.post("/config", data={"submissions": "5", "feedback_note": "off"})
+    assert resp.status_code == 302
+    assert os.environ.get("CTF_MAX_SUBMITS") == "5"
+    assert os.environ.get("CTF_FEEDBACK_NOTE") == "off"
+    resp = client.post("/config", data={"submissions": "0"})
+    assert "must be positive" in client.get("/config").get_data(as_text=True)
+    resp = client.post("/config", data={"feedback_note": "banana"})
+    assert "must be &#39;on&#39; or &#39;off&#39;" in client.get("/config").get_data(as_text=True)

@@ -38,6 +38,7 @@ from flask import (
 
 from ctf_agent.agent import Limits, run_agent
 from ctf_agent.config import load_env, update_env
+from ctf_agent.feedback import build_handoff
 from ctf_agent.metrics import estimate_cost, load_attempts, summarize_attempts
 from ctf_agent.runner import load_target, new_run_id, stage_workspace
 
@@ -121,6 +122,7 @@ def make_limits() -> Limits:
         tool_timeout_s=_env_int("CTF_TOOL_TIMEOUT_S", None) or cfg.get("tool_timeout_s"),
         max_output_tokens=_env_int("CTF_MAX_OUTPUT_TOKENS", None) or cfg.get("max_output_tokens"),
         max_total_tokens=max_total,
+        max_submits=_env_int("CTF_MAX_SUBMITS", None) or 3,
     )
 
 
@@ -137,6 +139,7 @@ _CFG_INT_FIELDS = (
     ("CTF_MAX_OUTPUT_TOKENS", "max_output_tokens"),
     ("CTF_TOOL_OUTPUT_CHARS", "tool_output_chars"),
     ("CTF_TOOL_TIMEOUT_S", "tool_timeout_s"),
+    ("CTF_MAX_SUBMITS", "submissions"),
 )
 
 
@@ -206,6 +209,12 @@ def config():
                 flash("'retries' must be 0 or a positive integer.", "error")
                 return redirect(url_for("config"))
             updates["CTF_MAX_RETRIES"] = retries_raw
+        fb_raw = (request.form.get("feedback_note") or "").strip().lower()
+        if fb_raw:
+            if fb_raw not in {"on", "off"}:
+                flash("'feedback_note' must be 'on' or 'off'.", "error")
+                return redirect(url_for("config"))
+            updates["CTF_FEEDBACK_NOTE"] = fb_raw
         total_raw = (request.form.get("max_total_tokens") or "").strip()
         total: str | None = None
         if total_raw and total_raw.lower() not in {"0", "none"}:
@@ -251,6 +260,8 @@ def config():
             "tool_timeout_s": os.environ.get("CTF_TOOL_TIMEOUT_S", ""),
             "max_total_tokens": os.environ.get("CTF_MAX_TOTAL_TOKENS", ""),
         },
+        submissions=os.environ.get("CTF_MAX_SUBMITS", ""),
+        feedback_note=os.environ.get("CTF_FEEDBACK_NOTE", "on"),
         retries=os.environ.get("CTF_MAX_RETRIES", ""),
     )
 
@@ -288,6 +299,7 @@ class Job:
     tool_calls: int = 0
     elapsed_s: float | None = None
     error: str = ""
+    extra: dict[str, Any] = field(default_factory=dict)   # submissions, feedback, …
 
 
 JOBS: dict[str, Job] = {}
@@ -326,6 +338,32 @@ def _tail_trace(job: Job, trace: Path, stop: threading.Event) -> None:
         stop.wait(0.3)
 
 
+def _feedback_enabled() -> bool:
+    """Evaluator handoff notes for retry chains (Config-tab toggle)."""
+    return (os.environ.get("CTF_FEEDBACK_NOTE", "on").strip().lower()
+            not in {"0", "off", "false", "no"})
+
+
+def _handoff_for(job: Job) -> str | None:
+    """Evaluator feedback from the PREVIOUS failed attempt of this family.
+
+    Deterministically extracted from that attempt's trace (zero model tokens).
+    Only model-failure attempts supply notes; a skipped/errored/cancelled
+    earlier attempt contributes nothing. Disabled by CTF_FEEDBACK_NOTE=off.
+    """
+    if job.attempt <= 1 or not _feedback_enabled():
+        return None
+    for k in range(job.attempt - 1, 0, -1):
+        prior = JOBS.get(f"{job.base_id}-t{k}")
+        if prior is None or prior.error or prior.verdict == "skipped":
+            continue  # infra failure / skipped — no prior model attempt to learn from
+        trace = prior.run_dir / "trace.jsonl"
+        if not trace.is_file():
+            continue
+        return build_handoff(trace, trial=k)
+    return None
+
+
 def _execute(job: Job) -> None:
     """Run one attempt synchronously (called on the worker thread).
 
@@ -351,6 +389,7 @@ def _execute(job: Job) -> None:
     run_dir = job.run_dir
     run_dir.mkdir(parents=True, exist_ok=True)
     trace = run_dir / "trace.jsonl"
+    note: str | None = None   # evaluator handoff (set below when retrying)
     started = time.monotonic()
     stop = threading.Event()
     tail = threading.Thread(target=_tail_trace, args=(job, trace, stop), daemon=True)
@@ -358,6 +397,7 @@ def _execute(job: Job) -> None:
     try:
         target = load_target(dataset, job.cid)
         workspace = stage_workspace(target, run_dir / "workspace")
+        note = _handoff_for(job)
         result = run_agent(
             target, workspace, make_limits(), trace,
             metadata={
@@ -367,10 +407,13 @@ def _execute(job: Job) -> None:
                 "max_attempts": job.max_attempts,
                 "model": os.environ.get("CTF_MODEL"),
             },
+            feedback=note,
         )
         job.solved = bool(result.verified)
         # lowercase to match Result.status ("solved") 1:1 — the UI uppercases
         job.verdict = "solved" if result.verified else (result.status or "no_flag")
+        job.extra["submissions"] = result.submissions
+        job.extra["feedback"] = bool(note)
     except Exception as e:  # noqa: BLE001
         job.solved = False
         job.verdict = f"error: {type(e).__name__}: {e}"
@@ -403,6 +446,8 @@ def _execute(job: Job) -> None:
             )
         ),
         "elapsed_s": (result.elapsed_s if result else job.elapsed_s),
+        "submissions": (result.submissions if result else None),
+        "feedback": bool(note),
         "trace_file": str(trace),
     }
     # Session report: the Report tab only shows attempts made since the last
@@ -465,6 +510,7 @@ def _start_jobs(cids: list[str]) -> list[Job]:
 def _job_payload(db: Job) -> dict[str, Any]:
     with _lock:
         events = list(db.events)
+    submissions = db.extra.get("submissions")
     out_events: list[dict[str, Any]] = []
     for ev in events:
         if ev.get("kind") == "model":
@@ -513,6 +559,7 @@ def _job_payload(db: Job) -> dict[str, Any]:
                 "status": ev.get("status"),
                 "verified": bool(ev.get("verified")),
                 "steps": ev.get("steps"),
+                "submits": ev.get("submits"),
             })
         else:
             out_events.append({"kind": str(ev.get("kind", "?")), "t": ev.get("t"),
@@ -527,6 +574,8 @@ def _job_payload(db: Job) -> dict[str, Any]:
         "model_calls": db.model_calls,
         "tool_calls": db.tool_calls,
         "elapsed_s": db.elapsed_s,
+        "submissions": submissions,
+        "feedback": bool(db.extra.get("feedback")),
         "events": out_events,
         "attempt": db.attempt,
         "max_attempts": db.max_attempts,
