@@ -187,8 +187,11 @@ continue with identical results directories.
 ## Fixed run limits (used for all reported attempts)
 
 30 steps · 15 min · 150 000 total-token cap · 4 000 tool-output chars ·
-60 s tool timeout · 1 024 max output tokens · model `gpt-5.4-mini`
-(`configs/scored_set.json` + `config.json` captured alongside every batch).
+60 s tool timeout · 1 024 max output tokens. The first scored batch ran on
+`gpt-5.4-mini` (Duke AI Gateway); bulk sessions later ran on `gpt-oss:120b`
+(Ollama Cloud) after the gateway quota was exhausted — attempts record their model,
+and every batch snapshot captures whatever config it used
+(`configs/scored_set.json` + `config.json` written alongside the results).
 
 ## Testing
 

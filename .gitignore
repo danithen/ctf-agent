@@ -10,6 +10,7 @@ runs/
 traces/
 results/*/runs/
 results/**/trace.jsonl
+results/attempts.jsonl
 .env
 .env.*
 !.env.example
