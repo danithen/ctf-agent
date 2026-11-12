@@ -54,11 +54,20 @@ Config-D trace mining (200-step budget) exposed a costlier class: tool errors th
 *   **Shell-redirect habits:** `2>/dev/null` hit the command blocklist ~15 times per sweep; the error now teaches the redirect-free idiom (filter inside the pipe).
 *   **Malformed arguments and prompt lies:** bare `KeyError('path')` outputs became tool+argument-naming errors; and the SYSTEM prompt stopped advertising `radare2` (removed from the image in V13) after a live `radare2: not found` turn, eliminating claims the environment cannot back.
 
+### 2.5 Method-Level Rev Failures (oracle, observation, verification)
+Across the rev-* challenges the same four method-level death patterns recurred, each trace-evidenced:
+*   **Oracle never consulted.** Challenges ship a runnable executable — an unlimited yes/no oracle. `tablez` was probed exactly once (`AAAA...`) over four attempts while 30+ static-analysis steps were spent elsewhere.
+*   **Manual reconstruction instead of gdb.** ~10 steps of virtual-address→file-offset arithmetic (all rejected or wrong-section) when `gdb -batch -ex 'b *0x84a' -ex 'x/510bx 0xADDR'` prints the table directly from memory.
+*   **Context thrash.** 20–40 overlapping `objdump` slices were re-fetched per attempt because disassembly was never persisted to disk once and re-read.
+*   **Unverified glue code.** A parser that returned an empty mapping (`MAPPING = {}`) seeded five more solver attempts — the run never checked its own output before building on it.
+
+Two interventions were added (V15/V16): a **deterministic triage brief** that pre-computes the 5–8 static facts every attempt otherwise re-derives (inventory, ELF class/arch/entry, capped needle-string hits — the same bytes the agent could read itself, so zero information advantage), and a **method doctrine** in the system prompt (oracle probing, gdb direct memory reads, persist-once, verify-before-build). Both are ablatable: the brief is gated by `CTF_TRIAGE=off`, and every trace's `meta` line records whether it ran.
+
 ---
 
 ## 3. Ablation Study and Testing
 
-Each system modification was piloted on a specific challenge before being integrated. The following table summarizes the iterative development (V1–V14).
+Each system modification was piloted on a specific challenge before being integrated. The following table summarizes the iterative development (V1–V16).
 
 | Version | Modification | Target Challenge | Result | Decision |
 |---|---|---|---|---|
@@ -72,6 +81,8 @@ Each system modification was piloted on a specific challenge before being integr
 | **V12** | Workspace-derived provisioning | `msc-ezmaze` | Automated dep. management | **Kept** |
 | **V13** | Baked-in Capability Layer | `msc-ezmaze` | Eliminated env. starvation | **Kept** |
 | **V14** | Actionable tool errors + prompt truth | Config-D sweep (`rev-*`) | Broke verbatim retry traps (~90 wasted steps/sweep) | **Kept** |
+| **V15** | Deterministic triage brief (zero-info) | config-D `rev-*` traces | Removed 5–8 redundant triage steps/attempt | **Kept** |
+| **V16** | Rev method doctrine (oracle/gdb/persist-once) | `rev-tablez`, `rev-beleaf` traces | Addresses the four method death patterns | **Kept** |
 
 **Validation:** The final scaffolding was validated using `tests/test_agent_loop.py` with a scripted mock model, ensuring that nudge-logic, elision, and coaching were functionally correct before applying them to LLMs.
 
