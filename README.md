@@ -1,5 +1,5 @@
 # ctf-agent
----
+
 #### AI Use Disclaimer:
 I used a custom pi agent running glm-5.3-flash to help me design and create the harness for this agent. There were a lot of changes and issues I found along the way, most notably the agent wanting to feed the solver the flags so we could get more solves. To combat this I made the agent require a checkout through the submit-flag tool which checked the flag using the NYU CTF Utils.
 ---
