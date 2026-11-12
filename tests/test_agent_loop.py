@@ -504,7 +504,7 @@ def test_attempt_snapshots_artifacts_for_handoff(tmp_path: Path, fake_chat):
     next to the trace, before stage_workspace wipes the next attempt's dir."""
     ws = tmp_path / "ws"
     write_description(ws)
-    sc = fake_chat([
+    fake_chat([
         {"assistant": {"role": "assistant", "content": "*thinking about calc.py*\n", "tool_calls": None}},
         {"assistant": {"role": "assistant", "content": None,
                        "tool_calls": [tool_call(1, "write_file",
