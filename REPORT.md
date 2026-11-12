@@ -173,9 +173,6 @@ agent commit `5549dd3`, 3 fresh trials × 6 challenges, `results/ablation-v18/`)
 ---
 
 ## 5. Disclosure of Reused Code and AI Assistance
-
-**Team:** dthend (dthend@pm.me) — sole author.
-
 **Third-Party Components:**
 *   **CTFTiny Benchmark:** (GPL-2.0) Used unmodified for challenge data and verification.
 *   **LangChain / LangSmith:** (MIT) Used as a chat completion wrapper and for observability.
