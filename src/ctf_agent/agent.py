@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import collections
 import json
 import logging
 import os
@@ -313,6 +314,7 @@ def run_agent(
     replay_once: set[tuple[str, ...]] = set()
     stubbed_ids: set[str] = set()
     nudges = 0
+    err_storm: collections.Counter[str] = collections.Counter()  # identical-error watchdog (V18)
     checkpointed = False    # halfway evaluator note fired once?
     warned_end = False      # near-limit escalation fired once?
     try:
@@ -442,32 +444,53 @@ def run_agent(
                     sig_by_id[c["id"]] = sig
                     if name == "submit_flag":
                         candidate = str(args.get("flag", ""))
-                        submits += 1
-                        ok = target.check(candidate)
-                        if ok:
-                            out = "CORRECT"
-                            log("submission", verified=True, n=submits)
-                            verified = True
-                            status = "solved"
-                            done = True
+                        if "?" in candidate:
+                            # Placeholder submissions ('FLAG{???}', 'CTF{?}?')
+                            # burned real submission budget in the config-C
+                            # sweep. Deterministic, cost-free rejection.
+                            out = ("Placeholder submission rejected (contains a literal '?') — "
+                                   "this did NOT consume your submission budget. "
+                                   "Submit only a derived candidate flag with real values.")
+                            log("submission", placeholder=True, candidate=candidate[:80])
                         else:
-                            out = (f"INCORRECT (submission {submits} of {limits.max_submits}). "
-                                   f"The verifier rejected: {candidate[:100]}\n"
-                                   "Do not submit again without new supporting evidence — "
-                                   "check your derivation against the challenge format.")
-                            # Rejected candidates are recorded: they are wrong, so
-                            # storing them costs nothing and helps the next attempt.
-                            log("submission", verified=False, n=submits, candidate=candidate[:80])
-                            if submits >= limits.max_submits:
-                                out += (f"\nThat was your final submission ({submits} of "
-                                        f"{limits.max_submits}). No further submit_flag "
-                                        "calls will be accepted.")
-                                status = "no_flag"
+                            submits += 1
+                            ok = target.check(candidate)
+                            if ok:
+                                out = "CORRECT"
+                                log("submission", verified=True, n=submits)
+                                verified = True
+                                status = "solved"
                                 done = True
+                            else:
+                                out = (f"INCORRECT (submission {submits} of {limits.max_submits}). "
+                                       f"The verifier rejected: {candidate[:100]}\n"
+                                       "Do not submit again without new supporting evidence — "
+                                       "check your derivation against the challenge format.")
+                                # Rejected candidates are recorded: they are wrong, so
+                                # storing them costs nothing and helps the next attempt.
+                                log("submission", verified=False, n=submits, candidate=candidate[:80])
+                                if submits >= limits.max_submits:
+                                    out += (f"\nThat was your final submission ({submits} of "
+                                            f"{limits.max_submits}). No further submit_flag "
+                                            "calls will be accepted.")
+                                    status = "no_flag"
+                                    done = True
                     else:
                         out = _run_tool(ws, name, args, limits.tool_output_chars)
                 except (ToolError, KeyError, json.JSONDecodeError) as e:
                     out = f"error: {e}"
+                    # Error-storm monitor: identical tool errors retried verbatim
+                    # burned up to 40% of some attempts (44 errors in 106 steps).
+                    # At the 3rd repeat of one signature, push a nudge naming the
+                    # storm — once per signature, and only when it is live.
+                    err_sig = out[:100]
+                    err_storm[err_sig] += 1
+                    if err_storm[err_sig] == 3:
+                        messages.append({"role": "user", "content": (
+                            f"You have produced this exact error 3 times this attempt: "
+                            f"'{err_sig[7:90]}'... Read the error text — it names the fix "
+                            "— and change approach; repeating it wastes your budget.")})
+                        log("error_storm", n=3, sig=err_sig[7:80])
                 log("tool", name=name, result=out)
                 messages.append({"role": "tool", "tool_call_id": c["id"], "content": out})
 

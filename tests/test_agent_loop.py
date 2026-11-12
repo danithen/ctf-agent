@@ -517,3 +517,52 @@ def test_attempt_snapshots_artifacts_for_handoff(tmp_path: Path, fake_chat):
     snap = json.loads((tmp_path / "artifacts.json").read_text())
     assert snap["notes"].endswith("invert trans_tbl pairs")
     assert "description.txt" in snap["files"] and "notes.md" in snap["files"]
+
+
+def test_error_storm_nudge_fires_on_third_identical_error(tmp_path: Path, fake_chat):
+    """V18: identical tool errors retried verbatim burned up to 41% of steps
+    (44 errors / 106 steps in one sweep attempt). At the 3rd identical error
+    signature the loop injects an explicit nudge without extra model calls."""
+    ws = tmp_path / "ws"
+    write_description(ws)
+    # three run_command calls with distinct args (so repeat-guards stay quiet)
+    # but identical missing-arg error text -> the same storm signature
+    sc = fake_chat([
+        {"assistant": {"role": "assistant", "content": None,
+                       "tool_calls": [tool_call(1, "run_command", "{}")]}},
+        {"assistant": {"role": "assistant", "content": None,
+                       "tool_calls": [tool_call(2, "run_command", '{"cwd": "x"}')]}},
+        {"assistant": {"role": "assistant", "content": None,
+                       "tool_calls": [tool_call(3, "run_command", '{"stdin": "y"}')]}},
+        {"assistant": {"role": "assistant", "content": None,
+                       "tool_calls": [tool_call(4, "submit_flag", '{"flag": "flag{abc}"}')]}},
+    ])
+    result = run_agent(make_target(), ws, basic_limits(30), tmp_path / "trace.jsonl")
+    assert result.verified
+    storm = [m for m in sc.seen[3] if m.get("role") == "user"
+             and "exact error 3 times" in m.get("content", "")]
+    assert storm, "error-storm nudge not injected"
+    kinds = [json.loads(l)["kind"] for l in (tmp_path / "trace.jsonl").read_text().splitlines()]
+    assert "error_storm" in kinds
+
+
+def test_placeholder_submission_is_free(tmp_path: Path, fake_chat):
+    """V18: 'FLAG{???}' placeholders burned real submission budget (3 of 3
+    consumed on placeholders in sweep t1s). Literal-'?' submissions are now
+    rejected WITHOUT consuming budget; the real candidate still counts."""
+    ws = tmp_path / "ws"
+    write_description(ws)
+    fake_chat([
+        {"assistant": {"role": "assistant", "content": None,
+                       "tool_calls": [tool_call(1, "submit_flag", '{"flag": "FLAG{???}"}')]}},
+        {"assistant": {"role": "assistant", "content": None,
+                       "tool_calls": [tool_call(2, "submit_flag", '{"flag": "flag{abc}"}')]}},
+    ])
+    result = run_agent(make_target(), ws, basic_limits(30), tmp_path / "trace.jsonl")
+    assert result.verified                 # real candidate solved on the 1st real slot
+    assert result.status == "solved"
+    events = [json.loads(l) for l in (tmp_path / "trace.jsonl").read_text().splitlines()]
+    ph = [e for e in events if e.get("kind") == "submission" and e.get("placeholder")]
+    real_bad = [e for e in events if e.get("kind") == "submission"
+                and not e.get("placeholder") and not e.get("verified")]
+    assert len(ph) == 1 and not real_bad    # placeholder logged separately, never scored
