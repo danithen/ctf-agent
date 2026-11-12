@@ -1,0 +1,24 @@
+{
+  "config_file": "configs/scored_set.json",
+  "benchmark_commit": "f1c9531672c45b24b7fb5f3aa44a7ac33d3602f8",
+  "agent_commit": "5549dd3c31e0f77551d75ac0f969372a63f77373",
+  "model": "gpt-oss:120b",
+  "limits": {
+    "max_steps": 30,
+    "max_minutes": 15,
+    "tool_output_chars": 4000,
+    "tool_timeout_s": 60,
+    "max_output_tokens": 1024,
+    "max_total_tokens": 150000
+  },
+  "challenges": [
+    "rev-baby-mult",
+    "rev-tablez",
+    "rev-beleaf",
+    "rev-rap",
+    "rev-sourcery",
+    "rev-whataxor"
+  ],
+  "trials": 3,
+  "started": "2026-11-11T18:21:49-0600"
+}

@@ -83,6 +83,8 @@ Each system modification was piloted on a specific challenge before being integr
 | **V14** | Actionable tool errors + prompt truth | Config-D sweep (`rev-*`) | Broke verbatim retry traps (~90 wasted steps/sweep) | **Kept** |
 | **V15** | Deterministic triage brief (zero-info) | config-D `rev-*` traces | Removed 5–8 redundant triage steps/attempt | **Kept** |
 | **V16** | Rev method doctrine (oracle/gdb/persist-once) | `rev-tablez`, `rev-beleaf` traces | Addresses the four method death patterns | **Kept** |
+| **V17** | Handoff v2 (artifact snapshot, error ledger, verbatim notes, workspace-reset fact) | `babycrypto` retry chains | ≤1800-char deterministic handoff; batch trials stay handoff-free | **Kept** |
+| **V18** | Error-storm watchdog + free placeholder rejection | `rev-*` ablation (§4.4) | 12 nudges fired; **0 same-signature repeats after any nudge**; placeholder slots 0/18 burned | **Kept** |
 
 **Validation:** The final scaffolding was validated using `tests/test_agent_loop.py` with a scripted mock model, ensuring that nudge-logic, elision, and coaching were functionally correct before applying them to LLMs.
 
@@ -123,7 +125,37 @@ To test the hypothesis that reverse-engineering challenges are bound by context 
     expands the search envelope but is not strictly binding — method variance dominates
     (see §2.4–2.5 for the mechanism).
 
-### 4.4 Summary of Findings
+### 4.4 V14–V18 Ablation (measured effect)
+
+Model-matched, fixed-caps, fresh-trial comparison on the `rev-*` subset
+(`30 steps · 150k tokens · 4k tool output · ≤3 submits`; ablation arm ran at
+agent commit `5549dd3`, 3 fresh trials × 6 challenges, `results/ablation-v18/`):
+
+| Arm | n | Solves | Steps/att | Errors/att | Error tax | Storm nudges | Same-sig repeats after nudge | Placeholder slots burned | Triage stamped |
+|---|---|---|---|---|---|---|---|---|---|
+| pre-V14 fresh trials (bulk ledger, meta-matched) | 30 | 1 | 27.6 | 5.5 | 20% | — | 11/22* | 3 (manual trace scan) | 0/30 |
+| V14–V18 ablation (fresh trials) | 18 | 1 | 28.0 | 5.3 | 19% | 12/18 attempts | **0/12** | 0/18 | 18/18 |
+
+\*pre-V14 row measured on the 22 chain-batch attempts (fresh-trial bulk rows predate the
+`error_storm` event kind; chain rows had handoff context that fresh trials lack).
+
+**Measured effects, honestly split:**
+
+*   **Watchdog (V18) works as designed:** every 3rd identical error fired a nudge, and after
+    **all 12 nudges the same signature never repeated** (0/12). The loop-breaker is real.
+*   **But the error tax did not move (20% → 19%):** after a nudge the model stops repeating
+    *that* error but begins generating *new* ones — the nudges break loops, they do not fix
+    the method. Prompt-level text (V14 actionable wording, V15 triage, V16 doctrine) is
+    visible in every trace yet the top error class (`run_command` forbidden-character
+    rejections, 43/136 ablation errors) persists in both arms.
+*   **Solve rate is within noise:** 1/30 → 1/18, both solves `rev-baby-mult` (the ablation
+    solve: 27 steps, 115,555 in / 7,057 out tokens, 34 s). The other five rev-* challenges
+    remain unsolved in every arm.
+*   **Instrumentation gap limiting diagnosis:** tool events record results, not command
+    *arguments*, so which forbidden token triggered the dominant error class is not
+    recoverable from these traces (candidate V19: one-line `args` field on `tool` events).
+
+### 4.5 Summary of Findings
 1.  **Tractability of Cryptography:** Cryptographic challenges were solved efficiently within fixed caps, typically requiring $< 60\text{k}$ tokens.
 2.  **Capacity Bottlenecks in RE (revised):** Expanded caps converted budget into retry loops,
     not solves: the `200 steps / 1M tokens` bulk sweep produced **0 solves in 15 attempts** while
@@ -131,15 +163,18 @@ To test the hypothesis that reverse-engineering challenges are bound by context 
     fixed-cap attempt solved `rev-baby-mult`. Extra budget is neither necessary (the
     `~60\text{k}`-token solve exists) nor sufficient (the 1M-token sweep).
 3.  **Complexity Walls:** `msc-ezmaze` remained unsolved across all configurations, suggesting a higher reasoning threshold or a need for specialized tool-use not present in the current toolkit.
-4.  **Consolidated metrics:** a regenerable cross-era report over **all 136 recorded attempts**
+4.  **Consolidated metrics:** a regenerable cross-era report over **all 154 recorded attempts**
     (scored, dev, orphaned traces), every attempt bucketed by its own trace meta, lives at
     `results/RESULTS.md` with companion `results/full_summary.json`; regenerate with
-    `uv run python scripts/build_results_report.py`. Headline: 7 verified solves in 122 scored
-    attempts (3 under per-attempt-stamped fixed caps, 4 in unlabeled pre-meta runs).
+    `uv run python scripts/build_results_report.py`. Headline: **8 verified solves in 140
+    scored attempts** (fixed-per-attempt-stamped caps: 4/82; unlabeled pre-meta runs: 4/29).
+    The V14–V18 ablation arm and its traces live under `results/ablation-v18/` (§4.4).
 
 ---
 
 ## 5. Disclosure of Reused Code and AI Assistance
+
+**Team:** dthend (dthend@pm.me) — sole author.
 
 **Third-Party Components:**
 *   **CTFTiny Benchmark:** (GPL-2.0) Used unmodified for challenge data and verification.

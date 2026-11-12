@@ -17,7 +17,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from ctf_agent.metrics import estimate_cost
 
-RUNS = Path("runs/tui")
+RUNS = [Path("runs/tui"), Path("results/ablation-v18/runs"),
+        Path("results/scored/runs"), Path("results/pilot/runs"),
+        Path("results/pilot_checker/runs"), Path("results/pilot_baseline/runs")]
 LEDGERS = [
     ("gpt-5.4-mini scored (frozen)", Path("results/scored/attempts.jsonl")),
     ("gpt-5.4-mini TUI dev chain", Path("results/tui/attempts.jsonl")),
@@ -27,6 +29,7 @@ LEDGERS = [
     ("gpt-5.4-mini pilots", Path("results/pilot_baseline/attempts.jsonl")),
     ("gpt-oss:120b TUI chains", Path("results/attempts.jsonl")),
     ("gpt-oss:120b bulk", Path("results/ollama-gpt-oss-120b/attempts.jsonl")),
+    ("gpt-oss:120b V14-V18 ablation", Path("results/ablation-v18/attempts.jsonl")),
 ]
 
 
@@ -46,8 +49,16 @@ def read_jsonl(path: Path) -> list[dict]:
 
 
 def trace_meta(run_id: str) -> dict:
-    """meta (limits/triage/dev/challenge) + done (status/steps/submits) + token/cost sums."""
-    tp = RUNS / run_id / "trace.jsonl"
+    """meta (limits/triage/dev/challenge) + done (status/steps/submits) + token/cost sums.
+    Finds the trace under whichever run base dir holds this run_id."""
+    tp = None
+    for base in RUNS:
+        cand = base / run_id / "trace.jsonl"
+        if cand.exists():
+            tp = cand
+            break
+    if tp is None:
+        return {"meta": None, "done": None, "in_tok": None, "out_tok": None}
     out: dict = {"meta": None, "done": None, "in_tok": None, "out_tok": None}
     try:
         for l in tp.read_text().splitlines():
@@ -110,10 +121,21 @@ def main() -> int:
 
     # Orphan traces (runs with local traces but no ledger row): synthesize rows,
     # bucketed; excluded from comparable headline tables if unlabeled/dev.
-    for tp in sorted(RUNS.glob("*/trace.jsonl")):
-        rid = tp.parent.name
-        if rid in attempts:
-            continue
+    seen: set[str] = set()
+    for base in RUNS:
+        for tp in sorted(base.glob("*/trace.jsonl")):
+            rid = tp.parent.name
+            if rid in attempts or rid in seen:
+                continue
+            seen.add(rid)
+    # after establishing candidate dirs, synthesize rows for orphan run ids
+    for rid in list(seen):
+        tp = None
+        for base in RUNS:
+            cand = base / rid / "trace.jsonl"
+            if cand.exists():
+                tp = cand
+                break
         t = trace_meta(rid)
         if not t["meta"] and not t["done"]:
             continue

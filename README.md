@@ -184,6 +184,42 @@ was exhausted. Each attempt records its model, and each batch snapshot captures
 the configuration it used in `configs/scored_set.json` and the adjacent
 `config.json`.
 
+## Reproducing the experiment
+
+The full protocol is **pilot → fixed-caps sweep → consolidated report**:
+
+1. **Pilot (one challenge, one trial)** — shake out infrastructure before
+   spending budget on a sweep. Requires a reachable model endpoint
+   (`.env`: `LITELLM_BASE_URL` + `LITELLM_TOKEN` + `CTF_MODEL`) and
+   `benchmark/ctftiny.json`.
+
+   ```bash
+   uv run python -m ctf_agent.batch configs/scored_set.json --trials 1 \
+       --out results/pilot --only rev-baby-mult
+   ```
+
+2. **Fixed-caps sweep (fresh trials)** — one config file pins every cap
+   (`configs/scored_set.json`: 30 steps · 15 min · 150k tokens · 4k tool
+   output · 60s tool timeout · ≤3 submissions, token-matched `gpt-oss:120b`).
+   Every run gets a fresh staged workspace and `results/<out>/config.json`
+   stamps benchmark commit + agent commit + limits.
+
+   ```bash
+   uv run python -m ctf_agent.batch configs/scored_set.json --trials 3 \
+       --out results/sweep
+   ```
+
+3. **Consolidated report** — per-attempt buckets from trace `meta` (caps,
+   triage flag, dev flag), pass@k, tokens, cost, and error tax:
+
+   ```bash
+   uv run python scripts/build_results_report.py
+   ```
+
+Writes `results/RESULTS.md` + `results/full_summary.json` over all known
+ledgers (including `results/ablation-v18/`). Dev runs and `rev-checker` are
+excluded automatically by the `dev` meta flag.
+
 ## Containers
 
 The project ships as a reproducible container: rebuild it anywhere and get the
