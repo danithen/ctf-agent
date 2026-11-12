@@ -486,6 +486,21 @@ def run_agent(
         # Terminal record so the raw trace always states the outcome — the
         # runtime badge and the trace can be reconciled without opening code.
         log("done", status=status, verified=verified, steps=steps, submits=submits)
+        # Snapshot the attempt's distilled artifacts for the next handoff
+        # (stage_workspace wipes run_dir/workspace before the next attempt,
+        # so notes.md and generated files would otherwise be lost).
+        snap: dict[str, Any] = {"notes": None, "files": {}}
+        try:
+            for p in sorted(workspace.iterdir()):
+                if p.is_file():
+                    snap["files"][p.name] = p.stat().st_size
+            notes = workspace / "notes.md"
+            if notes.exists():
+                snap["notes"] = notes.read_text()[-1200:]
+            (trace_path.parent / "artifacts.json").write_text(
+                json.dumps(snap, default=str))
+        except Exception:  # noqa: BLE001, S110 — best-effort bookkeeping, never a run failure
+            pass
         fh.close()
 
     try:

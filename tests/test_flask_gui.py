@@ -515,3 +515,32 @@ def test_config_submissions_and_feedback_fields(env, env_guard):
     assert "must be positive" in client.get("/config").get_data(as_text=True)
     resp = client.post("/config", data={"feedback_note": "banana"})
     assert "must be &#39;on&#39; or &#39;off&#39;" in client.get("/config").get_data(as_text=True)
+
+
+def test_build_handoff_artifacts_and_error_ledger(tmp_path: Path):
+    """V17: (a) error ledger = the exact honest-but-deadly calls to stop
+    repeating; (b) notes.md passed verbatim; (c) explicit workspace-reset fact
+    so attempt N+1 doesn't read_file ghost artifacts (they're wiped)."""
+    from ctf_agent.feedback import build_handoff
+    trace = tmp_path / "trace.jsonl"
+    trace.write_text("\n".join([
+        json.dumps({"kind": "meta", "challenge": "rev-x", "trial": 1}),
+        json.dumps({"kind": "tool", "name": "run_command", "result": "objdump ok"}),
+        json.dumps({"kind": "tool", "name": "run_python", "result": "error: no file 'calc.py' in the workspace: write_file it first"}),
+        json.dumps({"kind": "tool", "name": "run_python", "result": "error: no file 'calc.py' in the workspace: write_file it first"}),
+        json.dumps({"kind": "tool", "name": "run_command", "result": "error: dd: cannot skip 0x201280"}),
+        json.dumps({"kind": "done", "status": "step_limit", "verified": False,
+                    "steps": 30, "submits": 0}),
+    ]) + "\n")
+    (tmp_path / "artifacts.json").write_text(json.dumps({
+        "notes": "trans_tbl at 0x201280 (.data, 510 bytes): in→out pairs. "
+                 "Constant 38B found; need inversion. MAPPING={} was a PARSE BUG.",
+        "files": {"notes.md": 412, "disasm.txt": 28411},
+    }))
+    note = build_handoff(trace)
+    assert "Errors to stop repeating: 'no file 'calc.py'" in note      # ×2 counted
+    assert "×2" in note
+    assert "'dd: cannot skip" in note                                  # second signature
+    assert "Your predecessor's notes (verbatim excerpt):" in note
+    assert "PARSE BUG" in note                                         # verbatim, not paraphrased
+    assert "workspace was RESET" in note and "disasm.txt (28411B)" in note

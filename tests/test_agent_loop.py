@@ -497,3 +497,23 @@ def test_prompt_documents_rev_method_facts():
     assert "gdb -batch" in s
     assert "tee disasm.txt" in s
     assert "first entries" in s
+
+
+def test_attempt_snapshots_artifacts_for_handoff(tmp_path: Path, fake_chat):
+    """End of attempt: workspace listing + notes.md tail land in artifacts.json
+    next to the trace, before stage_workspace wipes the next attempt's dir."""
+    ws = tmp_path / "ws"
+    write_description(ws)
+    sc = fake_chat([
+        {"assistant": {"role": "assistant", "content": "*thinking about calc.py*\n", "tool_calls": None}},
+        {"assistant": {"role": "assistant", "content": None,
+                       "tool_calls": [tool_call(1, "write_file",
+                                                json.dumps({"path": "notes.md",
+                                                            "content": "approach: invert trans_tbl pairs"}))]}},
+        {"assistant": {"role": "assistant", "content": None,
+                       "tool_calls": [tool_call(2, "submit_flag", '{"flag": "flag{abc}"}')]}},
+    ])
+    run_agent(make_target(), ws, basic_limits(30), tmp_path / "trace.jsonl")
+    snap = json.loads((tmp_path / "artifacts.json").read_text())
+    assert snap["notes"].endswith("invert trans_tbl pairs")
+    assert "description.txt" in snap["files"] and "notes.md" in snap["files"]

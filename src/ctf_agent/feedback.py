@@ -17,6 +17,7 @@ from __future__ import annotations
 import collections
 import json
 from pathlib import Path
+from typing import Any
 
 _MAX_NOTE_CHARS = 1800
 
@@ -60,11 +61,40 @@ def build_handoff(trace_path: Path, trial: int | None = None) -> str | None:
         parts.append(f"Tools used: {mix}.")
     if repeats:
         parts.append(f"{repeats} tool calls repeated earlier results — avoid re-deriving the same steps.")
+    # Error ledger: the exact honest-but-deadly calls the predecessor repeated
+    # (trace-evidenced retry trap class). This is the "what not to do" data:
+    # mechanically derived from the trace, not advice.
+    err_sigs = collections.Counter(
+        _clip(str(e.get("result", "")).replace("\n", " "), 70)
+        for e in tools if str(e.get("result", "")).startswith("error"))
+    if err_sigs:
+        sig = "; ".join(f"'{s[7:].strip() or 'error'}' ×{c}" for s, c in err_sigs.most_common(3))
+        parts.append(f"Errors to stop repeating: {sig}.")
     if errors:
         parts.append(f"{errors} tool calls errored (scripts that failed last time need rewriting, not rerunning).")
     if rejected:
         rej = ", ".join(_clip(r.replace("\n", " "), 60) for r in rejected[:5])
         parts.append(f"Flags the benchmark REJECTED: {rej} — do not resubmit these.")
+
+    # Artifact carry-over: the workspace is wiped between chain attempts, so
+    # prior files exist only here. The predecessor's notes.md is the highest-
+    # value distilled context available (the babycrypto solve came from such
+    # a seed) — pass it verbatim (clipped), not paraphrased.
+    art: dict[str, Any] | None = None
+    try:
+        art = json.loads((Path(trace_path).parent / "artifacts.json").read_text())
+    except Exception:  # noqa: BLE001, S110 — older traces have no snapshot
+        pass
+    if isinstance(art, dict):
+        files = art.get("files") or {}
+        if files:
+            listing = ", ".join(f"{n} ({s}B)" for n, s in list(files.items())[:6])
+            parts.append(f"The workspace was RESET between attempts — everything from the prior "
+                         f"one ({listing}) no longer exists; recreate any file you actually need "
+                         "rather than assuming it exists.")
+        notes = art.get("notes")
+        if notes:
+            parts.append("Your predecessor's notes (verbatim excerpt):\n" + _clip(str(notes).strip(), 900))
 
     tail = [e for e in reversed([e for e in lines if e.get("kind") == "tool"])]
     if tail:
